@@ -1,6 +1,15 @@
-cmake_minimum_required(VERSION 3.20.0)
+# Minimum Cmake version required to build this project
+cmake_minimum_required(VERSION 3.20)
 
-find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(mesh_flipper)
+# Locate the Zephyr RTOS source
+find_packages(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
-target_sources(app PRIVATE src/main.c)
+# Name the project
+project(MeshFlipper)
+
+# Locate teh source code for the application
+target_sources(
+    ${PROJECT_NAME}
+    PRIVATE
+    src/main.c
+)
