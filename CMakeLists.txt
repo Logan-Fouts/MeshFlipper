@@ -2,14 +2,22 @@
 cmake_minimum_required(VERSION 3.20)
 
 # Locate the Zephyr RTOS source
-find_packages(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 # Name the project
 project(MeshFlipper)
 
-# Locate teh source code for the application
+# Locate the source code for the application
 target_sources(
-    ${PROJECT_NAME}
+    app
     PRIVATE
     src/main.c
+    src/models/node.c
+    src/models/message.c
+)
+
+target_include_directories(
+    app
+    PRIVATE
+    include
 )
