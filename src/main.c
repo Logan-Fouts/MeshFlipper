@@ -1,12 +1,22 @@
 #include <stdio.h>
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/uart.h>
 
 #include "models/node.h"
 #include "models/message.h"
 
+
+const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
+
 int main(void)
 {
     printk("Starting MeshFlipper...\n");
+
+    if (!device_is_ready(uart_dev)) {
+        printk("Error: UART device is not ready\n");
+        return 0;
+    }
+
     const char *msg_packet = "Hello from MeshFlipper";
     struct message test_message = parse_message(msg_packet);
 
