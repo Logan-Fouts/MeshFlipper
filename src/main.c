@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/uart.h>
 
@@ -6,52 +8,109 @@
 #include "models/message.h"
 
 
-#define RX_MSG_MAX 256
+#define RX_FRAME_MAX 512
+#define MESHTASTIC_START1 0x94
+#define MESHTASTIC_START2 0xC3
+
+enum rx_state {
+    RX_WAIT_START1,
+    RX_WAIT_START2,
+    RX_WAIT_LEN_MSB,
+    RX_WAIT_LEN_LSB,
+    RX_READ_PAYLOAD,
+};
 
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
-static uint8_t rx_msg[RX_MSG_MAX];
+static uint8_t rx_frame[RX_FRAME_MAX + 4];
 static size_t rx_pos;
+static size_t rx_expected_len;
+static enum rx_state rx_state = RX_WAIT_START1;
 
-// UART interrupt callback function to handle incoming data, read bytes into a buffer until newline.
+static void rx_reset(void)
+{
+    rx_state = RX_WAIT_START1;
+    rx_pos = 0;
+    rx_expected_len = 0;
+}
+
+static void rx_consume_byte(uint8_t c)
+{
+    switch (rx_state) {
+    case RX_WAIT_START1:
+        if (c == MESHTASTIC_START1) {
+            rx_frame[0] = c;
+            rx_pos = 1;
+            rx_state = RX_WAIT_START2;
+        }
+        break;
+
+    case RX_WAIT_START2:
+        if (c == MESHTASTIC_START2) {
+            rx_frame[rx_pos++] = c;
+            rx_state = RX_WAIT_LEN_MSB;
+        } else if (c == MESHTASTIC_START1) {
+            rx_frame[0] = c;
+            rx_pos = 1;
+        } else {
+            rx_reset();
+        }
+        break;
+
+    case RX_WAIT_LEN_MSB:
+        rx_frame[rx_pos++] = c;
+        rx_expected_len = ((size_t)c) << 8;
+        rx_state = RX_WAIT_LEN_LSB;
+        break;
+
+    case RX_WAIT_LEN_LSB:
+        rx_frame[rx_pos++] = c;
+        rx_expected_len |= c;
+
+        if (rx_expected_len == 0 || rx_expected_len > RX_FRAME_MAX) {
+            printk("Invalid Meshtastic frame length: %u\n", (unsigned int)rx_expected_len);
+            rx_reset();
+            break;
+        }
+
+        rx_pos = 4;
+        rx_state = RX_READ_PAYLOAD;
+        break;
+
+    case RX_READ_PAYLOAD:
+        rx_frame[rx_pos++] = c;
+
+        if ((rx_pos - 4) >= rx_expected_len) {
+            printk("Meshtastic frame received: payload=%u bytes total=%u bytes\n",
+                   (unsigned int)rx_expected_len,
+                   (unsigned int)(rx_expected_len + 4));
+            rx_reset();
+        }
+        break;
+    }
+}
+
+// UART interrupt callback function to handle incoming data, read raw bytes and assemble one Meshtastic frame.
 static void uart_cb(const struct device *dev, void *user_data)
 {
     ARG_UNUSED(user_data);
 
-    if (!uart_irq_update(dev)) {
-        return;
-    }
+    uart_irq_update(dev);
 
-    // If the interrupt for rx is ready, and there is pending data, read it.
-    while (uart_irq_is_pending(dev) && uart_irq_rx_ready(dev)) {
+    while (uart_irq_rx_ready(dev)) {
         uint8_t c;
         int recv = uart_fifo_read(dev, &c, 1);
 
-        // If current byte read is <= 0, it means there is no more data to read, so we can exit the loop.
         if (recv <= 0) {
             break;
         }
 
-        // Ignore carriage return characters as this is not a typewritter.
-        if (c == '\r') {
+        if (rx_state == RX_READ_PAYLOAD && rx_pos >= sizeof(rx_frame)) {
+            printk("RX overflow, dropping Meshtastic frame\n");
+            rx_reset();
             continue;
         }
 
-        if (c == '\n') {
-            rx_msg[rx_pos] = '\0';
-            if (rx_pos > 0) {
-                printk("RX: %s\n", rx_msg);
-            }
-            rx_pos = 0;
-            continue;
-        }
-
-        // If we have room in the buffer, add the byte. Otherwise, reset the buffer and log an overflow.
-        if (rx_pos < (RX_MSG_MAX - 1)) {
-            rx_msg[rx_pos++] = c;
-        } else {
-            rx_pos = 0;
-            printk("RX overflow, dropping message\n");
-        }
+        rx_consume_byte(c);
     }
 }
 
@@ -69,9 +128,8 @@ int main(void)
         return 0;
     }
 
-    // Enable RX interrupts for the UART device
     uart_irq_rx_enable(uart_dev);
-    printk("UART listener ready on uart0 @ 115200. Send text ending with newline.\n");
+    printk("UART listener ready on uart0 @ 115200. Waiting for Meshtastic frames.\n");
 
 
     while (1) {
