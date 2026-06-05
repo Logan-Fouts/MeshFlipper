@@ -37,6 +37,8 @@ target_sources(
     src/main.c
     src/models/node.c
     src/models/message.c
+    src/communication/manage_pb.c
+    src/communication/uart_comms.c
 )
 
 target_include_directories(
