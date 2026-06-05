@@ -14,11 +14,11 @@
 
 static void decode_from_radio(const uint8_t *payload, size_t len);
 
+#define RX_FRAME_MAX 512 // Maximum payload size for a Meshtastic frame. The actual frame size will be this plus 4 bytes for the header.
+#define MESHTASTIC_START1 0x94 // First start byte for Meshtastic frames. Used to identify the beginning of a new frame in the UART data stream.
+#define MESHTASTIC_START2 0xC3 // Second start byte for Meshtastic frames.
 
-#define RX_FRAME_MAX 512
-#define MESHTASTIC_START1 0x94
-#define MESHTASTIC_START2 0xC3
-
+// RX state machine for assembling incoming UART bytes into meshtatsic frames.
 enum rx_state {
     RX_WAIT_START1,
     RX_WAIT_START2,
@@ -33,6 +33,7 @@ static size_t rx_pos;
 static size_t rx_expected_len;
 static enum rx_state rx_state = RX_WAIT_START1;
 
+// Constructs and sends a Meshtastic frame with given payload over UART. The frame consists of a 4-byte header followed by the payload.
 int send_meshtastic_frame(const uint8_t *payload, size_t payload_len)
 {
     uint8_t header[4];
@@ -41,15 +42,18 @@ int send_meshtastic_frame(const uint8_t *payload, size_t payload_len)
         return -EINVAL;
     }
 
+    // Construct header
     header[0] = MESHTASTIC_START1;
     header[1] = MESHTASTIC_START2;
     header[2] = (uint8_t)((payload_len >> 8) & 0xFF);
     header[3] = (uint8_t)(payload_len & 0xFF);
-
+   
+    // Send header over UART
     for (size_t i = 0; i < sizeof(header); i++) {
         uart_poll_out(uart_dev, header[i]);
     }
 
+    // Send payload over UART
     for (size_t i = 0; i < payload_len; i++) {
         uart_poll_out(uart_dev, payload[i]);
     }
@@ -57,6 +61,7 @@ int send_meshtastic_frame(const uint8_t *payload, size_t payload_len)
     return 0;
 }
 
+// Resets the RX state machine to wait for the next frame. Called on errors or after successfully processing a frame.
 static void rx_reset(void)
 {
     rx_state = RX_WAIT_START1;
@@ -64,70 +69,82 @@ static void rx_reset(void)
     rx_expected_len = 0;
 }
 
+// State Machine: Consumes one byte of UART data and updates the RX state machine accordingly. Assembles bytes into a complete frame before decoding.
 static void rx_consume_byte(uint8_t c)
 {
     switch (rx_state) {
-    case RX_WAIT_START1:
-        if (c == MESHTASTIC_START1) {
-            rx_frame[0] = c;
-            rx_pos = 1;
-            rx_state = RX_WAIT_START2;
-        }
-        break;
-
-    case RX_WAIT_START2:
-        if (c == MESHTASTIC_START2) {
-            rx_frame[rx_pos++] = c;
-            rx_state = RX_WAIT_LEN_MSB;
-        } else if (c == MESHTASTIC_START1) {
-            rx_frame[0] = c;
-            rx_pos = 1;
-        } else {
-            rx_reset();
-        }
-        break;
-
-    case RX_WAIT_LEN_MSB:
-        rx_frame[rx_pos++] = c;
-        rx_expected_len = ((size_t)c) << 8;
-        rx_state = RX_WAIT_LEN_LSB;
-        break;
-
-    case RX_WAIT_LEN_LSB:
-        rx_frame[rx_pos++] = c;
-        rx_expected_len |= c;
-
-        if (rx_expected_len == 0 || rx_expected_len > RX_FRAME_MAX) {
-            printk("Invalid Meshtastic frame length: %u\n", (unsigned int)rx_expected_len);
-            rx_reset();
+        // Wait for start byte. If we see it store it as the first byte and move to the next state. Otherwise keep waiting.
+        case RX_WAIT_START1:
+            if (c == MESHTASTIC_START1) {
+                rx_frame[0] = c;
+                rx_pos = 1;
+                rx_state = RX_WAIT_START2;
+            }
             break;
-        }
+        
+        // Wait for second start byte. If we see it store it and move to the next state. If we see the first start byte again, treat it as a new frame and stay in this state. Otherwise reset.
+        case RX_WAIT_START2:
+            if (c == MESHTASTIC_START2) {
+                rx_frame[rx_pos++] = c;
+                rx_state = RX_WAIT_LEN_MSB;
+            } else if (c == MESHTASTIC_START1) {
+                rx_frame[0] = c;
+                rx_pos = 1;
+            } else {
+                rx_reset();
+            }
+            break;
+        
+        // Wait for length MSB (Most Significant Byte). Store it and move to the next state to wait for LSB.
+        case RX_WAIT_LEN_MSB:
+            rx_frame[rx_pos++] = c;
+            // Shift the MSB to its position in the expected length and store it. The LSB will be ORed in the next state.
+            rx_expected_len = ((size_t)c) << 8;
+            rx_state = RX_WAIT_LEN_LSB;
+            break;
 
-        rx_pos = 4;
-        rx_state = RX_READ_PAYLOAD;
-        break;
+        // Wait for length LSB (Least Significant Byte). Store it and move to the next state to read the payload.
+        case RX_WAIT_LEN_LSB:
+            rx_frame[rx_pos++] = c;
+            // OR the LSB with the previously stored MSB to get the full expected length of the payload.
+            rx_expected_len |= c;
 
-    case RX_READ_PAYLOAD:
-        rx_frame[rx_pos++] = c;
+            if (rx_expected_len == 0 || rx_expected_len > RX_FRAME_MAX) {
+                printk("Invalid Meshtastic frame length: %u\n", (unsigned int)rx_expected_len);
+                rx_reset();
+                break;
+            }
 
-        if ((rx_pos - 4) >= rx_expected_len) {
-            decode_from_radio(&rx_frame[4], rx_expected_len);
-            rx_reset();
-        }
-        break;
+            rx_pos = 4;
+            rx_state = RX_READ_PAYLOAD;
+            break;
+
+        // Read payload bytes. Once the expected length is reached, decode the frame and reset the state machine.
+        case RX_READ_PAYLOAD:
+            rx_frame[rx_pos++] = c;
+
+            if ((rx_pos - 4) >= rx_expected_len) {
+                decode_from_radio(&rx_frame[4], rx_expected_len);
+                rx_reset();
+            }
+            break;
     }
 }
 
+// Decodes a complete Meshtastic frame payload using nanopb and prints out the contents based on the message type.
 static void decode_from_radio(const uint8_t *payload, size_t len)
 {
+    // Initialize the FromRadio message struct to zero and set up a nanopb input stream from the received payload buffer.
     meshtastic_FromRadio msg = meshtastic_FromRadio_init_zero;
     pb_istream_t stream = pb_istream_from_buffer(payload, len);
 
+    // Decode the payload into the FromRadio message struct. If decoding fails, print an error and return.
     if (!pb_decode(&stream, meshtastic_FromRadio_fields, &msg)) {
         printk("FromRadio decode failed: %s\n", PB_GET_ERROR(&stream));
         return;
     }
 
+    // Handle the different payload variants of the FromRadio message.
     switch (msg.which_payload_variant) {
     case meshtastic_FromRadio_my_info_tag:
         printk("[FromRadio] MyNodeInfo: node_num=%u\n",
@@ -230,13 +247,16 @@ static void decode_from_radio(const uint8_t *payload, size_t len)
     }
 }
 
+// Sends a ToRadio message called want_config_id to get radio config and node db.
 static int send_want_config(void)
 {
+    // Setup message as ToRadio with the want_config_id_tag variant and set want_config_id to 1 to request the config.
     meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
     msg.which_payload_variant = meshtastic_ToRadio_want_config_id_tag;
     msg.want_config_id = 1;
 
     uint8_t buf[meshtastic_ToRadio_size];
+    // Set up a nanopb output stream to encode the ToRadio message into the buffer.
     pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
 
     if (!pb_encode(&stream, meshtastic_ToRadio_fields, &msg)) {
@@ -250,18 +270,19 @@ static int send_want_config(void)
 // UART interrupt callback function to handle incoming data, read raw bytes and assemble one Meshtastic frame.
 static void uart_cb(const struct device *dev, void *user_data)
 {
-    ARG_UNUSED(user_data);
-
     uart_irq_update(dev);
 
     while (uart_irq_rx_ready(dev)) {
         uint8_t c;
+
+        // Pass in uart device, pointer to c to hold rx_data, and 1 as container size. Returns number of bytes read.
         int recv = uart_fifo_read(dev, &c, 1);
 
         if (recv <= 0) {
             break;
         }
 
+        // Check for overflow before consuming the byte
         if (rx_state == RX_READ_PAYLOAD && rx_pos >= sizeof(rx_frame)) {
             printk("RX overflow, dropping Meshtastic frame\n");
             rx_reset();
@@ -286,9 +307,11 @@ int main(void)
         return 0;
     }
 
+    // Enable RX interrupts to start receiving data. The callback will handle data as it comes in and assemble complete frames.
     uart_irq_rx_enable(uart_dev);
     printk("UART listener ready on uart0 @ 115200. Waiting for Meshtastic frames.\n");
 
+    // Send a want_config_id message to the radio to trigger the radio to send its config and node db on startup.
     if (send_want_config() < 0) {
         printk("Failed to send want_config_id\n");
     } else {
