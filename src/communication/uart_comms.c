@@ -10,6 +10,8 @@
 #include "communication/uart_comms.h"
 #include "communication/manage_pb.h"
 
+#include "models/message.h"
+
 #define RX_FRAME_MAX 512
 #define MESHTASTIC_START1 0x94 // First start byte for Meshtastic frames. Used to identify the beginning of a new frame in the UART data stream.
 #define MESHTASTIC_START2 0xC3 // Second start byte for Meshtastic frames.
@@ -63,10 +65,11 @@ static void rx_reset(void)
     rx_state = RX_WAIT_START1;
     rx_pos = 0;
     rx_expected_len = 0;
+    return;
 }
 
 // State Machine: Consumes one byte of UART data and updates the RX state machine accordingly. Assembles bytes into a complete frame before decoding.
-static void rx_consume_byte(uint8_t c)
+static meshtastic_FromRadio *rx_consume_byte(uint8_t c)
 {
     switch (rx_state) {
         // Wait for start byte. If we see it store it as the first byte and move to the next state. Otherwise keep waiting.
@@ -120,11 +123,15 @@ static void rx_consume_byte(uint8_t c)
             rx_frame[rx_pos++] = c;
 
             if ((rx_pos - 4) >= rx_expected_len) {
-                decode_from_radio(&rx_frame[4], rx_expected_len);
+                meshtastic_FromRadio *msg = decode_from_radio(&rx_frame[4], rx_expected_len);
                 rx_reset();
+                if (msg != NULL) {
+                    return msg;
+                }
             }
             break;
     }
+    return NULL;
 }
 
 // Sends a ToRadio message called want_config_id to get radio config and node db.
@@ -150,6 +157,7 @@ int send_want_config(void)
 // UART interrupt callback function to handle incoming data, read raw bytes and assemble one Meshtastic frame.
 void uart_cb(const struct device *dev, void *user_data)
 {
+    struct messageHistory *message_history = (struct messageHistory *)user_data;
     uart_irq_update(dev);
 
     while (uart_irq_rx_ready(dev)) {
@@ -169,6 +177,25 @@ void uart_cb(const struct device *dev, void *user_data)
             continue;
         }
 
-        rx_consume_byte(c);
+        meshtastic_FromRadio *msg = rx_consume_byte(c);
+        // If message is a text message, parse it into our internal message struct and print it out for debugging.
+        if (msg != NULL && msg->which_payload_variant == meshtastic_FromRadio_packet_tag &&
+            msg->packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+            msg->packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
+            // printk("Received text message");
+            struct message parsed_msg = parse_message(msg);
+            // print_message(&parsed_msg);
+            if (message_history->count < MAX_MESSAGE_HISTORY) {
+                message_history->messages[message_history->count++] = parsed_msg;
+            } else {
+                // If we exceed the max message history, overwrite the oldest message in a circular buffer fashion.
+                 message_history->messages[message_history->count % MAX_MESSAGE_HISTORY] = parsed_msg;
+                 message_history->count++;
+            }
+        } else if (msg != NULL) {
+            printk("Received non-packet FromRadio message with payload variant %u\n",
+                   (unsigned int)msg->which_payload_variant);
+        }
     }
+    return;
 }

@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "meshtastic/mesh.pb.h"
 
-void decode_from_radio(const uint8_t *payload, size_t len);
+meshtastic_FromRadio *decode_from_radio(const uint8_t *payload, size_t len);
 
 #endif
