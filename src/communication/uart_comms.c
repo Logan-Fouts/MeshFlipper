@@ -133,7 +133,7 @@ int send_want_config(void)
     // Setup message as ToRadio with the want_config_id_tag variant and set want_config_id to 1 to request the config.
     meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
     msg.which_payload_variant = meshtastic_ToRadio_want_config_id_tag;
-    msg.want_config_id = 1;
+    msg.want_config_id = 1; // Best practice would be to make this a random non-zero value
 
     uint8_t buf[meshtastic_ToRadio_size];
     // Set up a nanopb output stream to encode the ToRadio message into the buffer.
