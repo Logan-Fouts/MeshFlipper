@@ -1,8 +1,11 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <errno.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/uart.h>
+#include <pb_encode.h>
+#include "meshtastic/mesh.pb.h"
 
 #include "models/node.h"
 #include "models/message.h"
@@ -25,6 +28,30 @@ static uint8_t rx_frame[RX_FRAME_MAX + 4];
 static size_t rx_pos;
 static size_t rx_expected_len;
 static enum rx_state rx_state = RX_WAIT_START1;
+
+int send_meshtastic_frame(const uint8_t *payload, size_t payload_len)
+{
+    uint8_t header[4];
+
+    if (payload == NULL || payload_len == 0 || payload_len > RX_FRAME_MAX) {
+        return -EINVAL;
+    }
+
+    header[0] = MESHTASTIC_START1;
+    header[1] = MESHTASTIC_START2;
+    header[2] = (uint8_t)((payload_len >> 8) & 0xFF);
+    header[3] = (uint8_t)(payload_len & 0xFF);
+
+    for (size_t i = 0; i < sizeof(header); i++) {
+        uart_poll_out(uart_dev, header[i]);
+    }
+
+    for (size_t i = 0; i < payload_len; i++) {
+        uart_poll_out(uart_dev, payload[i]);
+    }
+
+    return 0;
+}
 
 static void rx_reset(void)
 {
@@ -89,6 +116,23 @@ static void rx_consume_byte(uint8_t c)
     }
 }
 
+static int send_want_config(void)
+{
+    meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
+    msg.which_payload_variant = meshtastic_ToRadio_want_config_id_tag;
+    msg.want_config_id = 1;
+
+    uint8_t buf[meshtastic_ToRadio_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
+
+    if (!pb_encode(&stream, meshtastic_ToRadio_fields, &msg)) {
+        printk("ToRadio encode failed: %s\n", PB_GET_ERROR(&stream));
+        return -EIO;
+    }
+
+    return send_meshtastic_frame(buf, stream.bytes_written);
+}
+
 // UART interrupt callback function to handle incoming data, read raw bytes and assemble one Meshtastic frame.
 static void uart_cb(const struct device *dev, void *user_data)
 {
@@ -130,6 +174,12 @@ int main(void)
 
     uart_irq_rx_enable(uart_dev);
     printk("UART listener ready on uart0 @ 115200. Waiting for Meshtastic frames.\n");
+
+    if (send_want_config() < 0) {
+        printk("Failed to send want_config_id\n");
+    } else {
+        printk("Sent ToRadio want_config_id\n");
+    }
 
 
     while (1) {

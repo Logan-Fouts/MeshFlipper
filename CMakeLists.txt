@@ -10,6 +10,26 @@ project(MeshFlipper)
 list(APPEND CMAKE_MODULE_PATH ${ZEPHYR_BASE}/modules/nanopb)
 include(nanopb)
 
+# Make protobufs/ available as an import root so "meshtastic/foo.proto" resolves.
+list(APPEND NANOPB_IMPORT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/protobufs)
+
+# Compile mesh.proto and all its transitive dependencies.
+zephyr_nanopb_sources(app
+    protobufs/meshtastic/mesh.proto
+    protobufs/meshtastic/channel.proto
+    protobufs/meshtastic/config.proto
+    protobufs/meshtastic/device_ui.proto
+    protobufs/meshtastic/module_config.proto
+    protobufs/meshtastic/atak.proto
+    protobufs/meshtastic/portnums.proto
+    protobufs/meshtastic/telemetry.proto
+    protobufs/meshtastic/xmodem.proto
+)
+
+# Generated .pb.h files land in build/protobufs/meshtastic/ but are included as
+# "meshtastic/X.pb.h", so build/protobufs/ must be on the include path.
+target_include_directories(app PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/protobufs)
+
 # Locate the source code for the application
 target_sources(
     app
