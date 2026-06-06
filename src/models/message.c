@@ -44,3 +44,25 @@ void print_message(struct message *msg)
     printk("  destination:   %d\n", msg->to);
     printk("  text:          %s\n", msg->text);
 }
+
+void print_message_history(struct message_history *mes_history)
+{
+    if (mes_history->count == 0) {
+        return;
+    }
+
+    for (int i = 0; i < mes_history->count; i++) {
+        struct message msg_copy;
+
+        //Breifly aquire lock before accessing specific mesage from history
+        key = k_spin_lock(&message_history->lock);
+        msg_copy = message_history.messages[ring_index];
+        k_spin_unlock(&message_history->lock, key);
+
+        printk("Message %zu: id=%d from=%d to=%d text=%s\n",
+                logical_index, msg_copy.id,
+                msg_copy.from,
+                msg_copy.to,
+                msg_copy.text);
+    }
+}
