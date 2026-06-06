@@ -41,16 +41,45 @@ int main(void)
         printk("Failed to send want_config_id\n");
     }
 
+    const int64_t want_config_interval_ms = 5LL * 60LL * 1000LL;
+    int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
+     
     while (1) {
-        k_sleep(K_SECONDS(30));
+        k_sleep(K_SECONDS(10));
+
+        int64_t now_ms = k_uptime_get();
+        if (now_ms >= next_want_config_ms) {
+            if (send_want_config() < 0) {
+                printk("Periodic want_config_id send failed\n");
+
+            }
+            next_want_config_ms = now_ms + want_config_interval_ms;
+        }
+
         printk("\n\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
-        printk("Message history: %zu messages stored\n", message_history.count);
-        for (size_t i = 0; i < message_history.count && i < MAX_MESSAGE_HISTORY; i++) {
+        printk("RX stats: %zu frames received, %zu dropped, %zu bytes processed\n",
+               rx_frames_received, rx_frames_dropped, rx_bytes_processed);
+        k_spinlock_key_t key = k_spin_lock(&message_history.lock);
+        size_t history_count = message_history.count;
+        size_t snapshot_count = history_count < MAX_MESSAGE_HISTORY ? history_count : MAX_MESSAGE_HISTORY;
+        size_t start_index = history_count > MAX_MESSAGE_HISTORY ? (history_count % MAX_MESSAGE_HISTORY) : 0;
+        k_spin_unlock(&message_history.lock, key);
+
+        printk("Message history: %zu messages stored\n", history_count);
+        for (size_t i = 0; i < snapshot_count; i++) {
+            size_t ring_index = (start_index + i) % MAX_MESSAGE_HISTORY;
+            size_t logical_index = history_count - snapshot_count + i;
+            struct message msg_copy;
+
+            key = k_spin_lock(&message_history.lock);
+            msg_copy = message_history.messages[ring_index];
+            k_spin_unlock(&message_history.lock, key);
+
             printk("Message %zu: id=%d from=%d to=%d text=%s\n",
-                   i, message_history.messages[i].id,
-                   message_history.messages[i].from,
-                   message_history.messages[i].to,
-                   message_history.messages[i].text);
+                   logical_index, msg_copy.id,
+                   msg_copy.from,
+                   msg_copy.to,
+                   msg_copy.text);
         }
     }
 

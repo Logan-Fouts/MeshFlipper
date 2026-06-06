@@ -69,39 +69,9 @@ meshtastic_FromRadio *decode_from_radio(const uint8_t *payload, size_t len)
         if (msg.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
             size_t payload_len = msg.packet.decoded.payload.size;
 
-            // If its a text message print it and return the decoded FromRadio message for further processing.
-            if (msg.packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
-                char text[234];
-                size_t copy_len = payload_len;
-
-                if (copy_len >= sizeof(text)) {
-                    copy_len = sizeof(text) - 1;
-                }
-
-                memcpy(text, msg.packet.decoded.payload.bytes, copy_len);
-                text[copy_len] = '\0';
-                // printk("Text: %s\n", text);
-                return &msg;
-            } else {
-                size_t preview_len = payload_len;
-                if (preview_len > 16) {
-                    preview_len = 16;
-                }
-
-                // printk("Data port=%d len=%u",
-                //        msg.packet.decoded.portnum,
-                //        (unsigned int)payload_len);
-
-                for (size_t i = 0; i < preview_len; i++) {
-                    // printk(" %02x", msg.packet.decoded.payload.bytes[i]);
-                }
-
-                if (payload_len > preview_len) {
-                    // printk(" ...");
-                }
-
-                // printk("\n");
-            }
+            // Silently skip non-text payloads in ISR path to avoid blocking.
+        } else {
+            // Packet arrived encrypted. Skip logging in ISR.
         }
         break;
 
@@ -125,5 +95,7 @@ meshtastic_FromRadio *decode_from_radio(const uint8_t *payload, size_t len)
         break;
     }
 
-    return NULL;
+    // Return &msg for all successfully decoded frames so the caller
+    // can inspect the variant and log what arrives.
+    return &msg;
 } 

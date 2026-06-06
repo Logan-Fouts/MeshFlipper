@@ -2,6 +2,7 @@
 #define MESSAGE_H
 
 #include <zephyr/kernel.h>
+#include <zephyr/spinlock.h>
 #include "meshtastic/mesh.pb.h"
 
 #define MAX_MESSAGE_HISTORY 100
@@ -24,6 +25,7 @@ void print_message(struct message *msg);
 struct messageHistory {
     struct message messages[MAX_MESSAGE_HISTORY];
     size_t count;
+    struct k_spinlock lock;
 };
 
 #endif

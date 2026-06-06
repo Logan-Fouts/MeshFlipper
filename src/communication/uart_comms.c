@@ -31,6 +31,11 @@ static size_t rx_pos;
 static size_t rx_expected_len;
 static enum rx_state rx_state = RX_WAIT_START1;
 
+// RX statistics counters
+volatile size_t rx_frames_received = 0;
+volatile size_t rx_frames_dropped = 0;
+volatile size_t rx_bytes_processed = 0;
+
 // Constructs and sends a Meshtastic frame with given payload over UART. The frame consists of a 4-byte header followed by the payload.
 int send_meshtastic_frame(const uint8_t *payload, size_t payload_len)
 {
@@ -172,29 +177,33 @@ void uart_cb(const struct device *dev, void *user_data)
 
         // Check for overflow before consuming the byte
         if (rx_state == RX_READ_PAYLOAD && rx_pos >= sizeof(rx_frame)) {
-            printk("RX overflow, dropping Meshtastic frame\n");
+            rx_frames_dropped++;
             rx_reset();
             continue;
         }
 
+        rx_bytes_processed++;
         meshtastic_FromRadio *msg = rx_consume_byte(c);
-        // If message is a text message, parse it into our internal message struct and print it out for debugging.
-        if (msg != NULL && msg->which_payload_variant == meshtastic_FromRadio_packet_tag &&
+        if (msg == NULL) {
+            continue;
+        }
+        rx_frames_received++;
+
+        if (msg->which_payload_variant == meshtastic_FromRadio_packet_tag &&
             msg->packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
             msg->packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
-            // printk("Received text message");
             struct message parsed_msg = parse_message(msg);
-            // print_message(&parsed_msg);
+            k_spinlock_key_t key = k_spin_lock(&message_history->lock);
             if (message_history->count < MAX_MESSAGE_HISTORY) {
                 message_history->messages[message_history->count++] = parsed_msg;
             } else {
-                // If we exceed the max message history, overwrite the oldest message in a circular buffer fashion.
-                 message_history->messages[message_history->count % MAX_MESSAGE_HISTORY] = parsed_msg;
-                 message_history->count++;
+                message_history->messages[message_history->count % MAX_MESSAGE_HISTORY] = parsed_msg;
+                message_history->count++;
             }
-        } else if (msg != NULL) {
-            printk("Received non-packet FromRadio message with payload variant %u\n",
-                   (unsigned int)msg->which_payload_variant);
+            k_spin_unlock(&message_history->lock, key);
+        } else if (msg->which_payload_variant == meshtastic_FromRadio_packet_tag &&
+                   msg->packet.which_payload_variant != meshtastic_MeshPacket_decoded_tag) {
+            // Keep ISR work minimal. Logging each encrypted packet here can starve RX.
         }
     }
     return;
