@@ -28,6 +28,6 @@ struct messageHistory {
     struct k_spinlock lock;
 };
 
-void print_message_history(struct message_history *mes_history);
+void print_message_history(struct messageHistory *mes_history);
 
 #endif

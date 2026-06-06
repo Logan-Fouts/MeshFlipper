@@ -16,7 +16,7 @@
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 struct messageHistory message_history = { .count = 0 };
 
-void setup()
+int setup()
 {
     if (!device_is_ready(uart_dev)) {
         printk("Error: UART device is not ready\n");
@@ -31,15 +31,26 @@ void setup()
 
     // Enable RX interrupts to start receiving data. The callback will handle data as it comes in and assemble complete frames.
     uart_irq_rx_enable(uart_dev);
+
     printk("UART listener ready on uart0 @ 115200. Waiting for Meshtastic frames.\n");
 
     // Send a want_config_id message to the radio to trigger the radio to send its config and node db on startup.
-    send_want_config()
+    if (send_want_config() < 0) {
+        printk("Error: failed to send want_config message\n");
+        return 0;
+    }
+
+    return 1;
 }
 
 int main(void)
 {
     printk("Starting MeshFlipper...\n");
+
+    if (setup() == 0) {
+        printk("Setup failed. Exiting.\n");
+        return -1;
+    }
 
     // TODO: Not sure if sending want more than at the begining is really needed, but was stuggling with reciveing packet stability.
     const int64_t want_config_interval_ms = 5LL * 60LL * 1000LL;
@@ -50,7 +61,7 @@ int main(void)
 
         int64_t now_ms = k_uptime_get();
         if (now_ms >= next_want_config_ms) {
-            send_want_config()
+            send_want_config();
             next_want_config_ms = now_ms + want_config_interval_ms;
         }
 
@@ -58,7 +69,7 @@ int main(void)
         printk("RX stats: %zu frames received, %zu dropped, %zu bytes processed\n",
                rx_frames_received, rx_frames_dropped, rx_bytes_processed);
 
-        printk("Message history: %zu messages stored\n", history_count);
+        printk("Message history: %zu messages stored\n", message_history.count);
         print_message_history(&message_history);
     }
 
