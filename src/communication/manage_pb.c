@@ -17,12 +17,13 @@ meshtastic_FromRadio *decode_from_radio(const uint8_t *payload, size_t len)
 
     // Decode the payload into the FromRadio message struct. If decoding fails, print an error and return.
     if (!pb_decode(&stream, meshtastic_FromRadio_fields, &msg)) {
-        // printk("FromRadio decode failed: %s\n", PB_GET_ERROR(&stream));
+        printk("FromRadio decode failed: %s\n", PB_GET_ERROR(&stream));
         return NULL;
     }
 
     // Handle the different payload variants of the FromRadio message.
     switch (msg.which_payload_variant) {
+    // TODO: handle case
     case meshtastic_FromRadio_my_info_tag:
         // printk("[FromRadio] MyNodeInfo: node_num=%u\n",
             //    (unsigned int)msg.my_info.my_node_num);

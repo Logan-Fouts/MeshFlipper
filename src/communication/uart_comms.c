@@ -189,6 +189,7 @@ void uart_cb(const struct device *dev, void *user_data)
         }
         rx_frames_received++;
 
+        // TODO: This is really ugly
         if (msg->which_payload_variant == meshtastic_FromRadio_packet_tag &&
             msg->packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
             msg->packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {

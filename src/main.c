@@ -41,6 +41,7 @@ int main(void)
         printk("Failed to send want_config_id\n");
     }
 
+    // TODO: Not sure if sending want more than at the begining is really needed, but was stuggling with reciveing packet stability.
     const int64_t want_config_interval_ms = 5LL * 60LL * 1000LL;
     int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
      
@@ -59,6 +60,8 @@ int main(void)
         printk("\n\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
         printk("RX stats: %zu frames received, %zu dropped, %zu bytes processed\n",
                rx_frames_received, rx_frames_dropped, rx_bytes_processed);
+
+        // Aquire lock on message history before accessing it
         k_spinlock_key_t key = k_spin_lock(&message_history.lock);
         size_t history_count = message_history.count;
         size_t snapshot_count = history_count < MAX_MESSAGE_HISTORY ? history_count : MAX_MESSAGE_HISTORY;
@@ -71,6 +74,7 @@ int main(void)
             size_t logical_index = history_count - snapshot_count + i;
             struct message msg_copy;
 
+            //Breifly aquire lock before accessing specific mesage from history
             key = k_spin_lock(&message_history.lock);
             msg_copy = message_history.messages[ring_index];
             k_spin_unlock(&message_history.lock, key);
