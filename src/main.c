@@ -50,6 +50,7 @@ int setup()
 void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
 {
     int node_num = -160769812;
+
     while (1) {
         k_sleep(K_SECONDS(10));
 
@@ -104,19 +105,22 @@ int main(void)
     }
 
     print_my_node_info(&node_list.my_info);
+    k_sleep(K_SECONDS(5));
     print_node_history_brief(&node_list);
 
 
     // Periodically send want config id to get all updates
-    const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL;
+    const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // Use long long to avoid overflow
     int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
 
 
     // TODO: (Remove) Test sending a message to a specific node. 
     k_sleep(K_SECONDS(3));
     int node_num = -160769812;
-    int ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.node_num);
+    int ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num);
 
+
+    print_node_history(&node_list);
 
     run_loop(next_want_config_ms, want_config_interval_ms);
 

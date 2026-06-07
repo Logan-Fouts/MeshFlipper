@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+// Helper function to safely copy strings from protobuf fields, ensuring null-termination and preventing buffer overflows.
 static void copy_proto_string(char *dest, size_t dest_size, const char *src)
 {
     if (dest == NULL || dest_size == 0) {
@@ -35,9 +36,9 @@ static int find_node_index_by_num(const struct nodeHistory *node_history, uint32
     return -1;
 }
 
-struct node parse_node(const meshtastic_FromRadio *node_packet)
+struct node_info parse_node(const meshtastic_FromRadio *node_packet)
 {
-    struct node n = {0};
+    struct node_info n = {0};
 
     if (node_packet != NULL) {
         if (node_packet->which_payload_variant == meshtastic_FromRadio_node_info_tag) {
@@ -48,15 +49,20 @@ struct node parse_node(const meshtastic_FromRadio *node_packet)
             n.has_hops_away = node_packet->node_info.has_hops_away;
             n.hops_away = node_packet->node_info.hops_away;
             n.via_mqtt = node_packet->node_info.via_mqtt;
+            n.favorited = node_packet->node_info.is_favorite;
 
-            if (node_packet->node_info.has_user) {
+            if (node_packet->node_info.has_user) { // This has_user is a nanopb thing that indicates whether the optional user field is present in the protobuf message.
                 copy_proto_string(n.user_id, sizeof(n.user_id), node_packet->node_info.user.id);
                 copy_proto_string(n.long_name, sizeof(n.long_name), node_packet->node_info.user.long_name);
                 copy_proto_string(n.short_name, sizeof(n.short_name), node_packet->node_info.user.short_name);
             }
         } else if (node_packet->which_payload_variant == meshtastic_FromRadio_my_info_tag) {
             n.valid = true;
+            n.is_my_info = true;
             n.num = node_packet->my_info.my_node_num;
+            n.reboot_count = node_packet->my_info.reboot_count;
+            n.nodedb_count = node_packet->my_info.nodedb_count;
+            n.device_id_len = node_packet->my_info.device_id.size;
         }
     }
 
@@ -79,7 +85,7 @@ void update_node_history(struct nodeHistory *node_history, const meshtastic_From
         }
 
         node_history->my_info.valid = true;
-        node_history->my_info.node_num = msg->my_info.my_node_num;
+        node_history->my_info.num = msg->my_info.my_node_num;
         node_history->my_info.reboot_count = msg->my_info.reboot_count;
         node_history->my_info.nodedb_count = msg->my_info.nodedb_count;
         node_history->my_info.device_id_len = device_id_len;
@@ -91,7 +97,7 @@ void update_node_history(struct nodeHistory *node_history, const meshtastic_From
     }
 
     if (msg->which_payload_variant == meshtastic_FromRadio_node_info_tag) {
-        struct node parsed_node = parse_node(msg);
+        struct node_info parsed_node = parse_node(msg);
         int existing_index;
 
         if (!parsed_node.valid) {
@@ -110,7 +116,7 @@ void update_node_history(struct nodeHistory *node_history, const meshtastic_From
     k_spin_unlock(&node_history->lock, key);
 }
 
-void print_node(struct node *n)
+void print_node(struct node_info *n)
 {
     if (n == NULL) {
         printk("\n[Node]\n  <null>\n");
@@ -134,9 +140,10 @@ void print_node(struct node *n)
         printk("  hops_away:     %u\n", (unsigned int)n->hops_away);
     }
     printk("  via_mqtt:      %s\n", n->via_mqtt ? "true" : "false");
+    printk("  favorited:     %s\n", n->favorited ? "true" : "false");
 }
 
-void print_my_node_info(const struct my_node_info *info)
+void print_my_node_info(const struct node_info *info)
 {
     if (info == NULL || !info->valid) {
         printk("\n[MyNodeInfo]\n  <not received>\n");
@@ -144,7 +151,7 @@ void print_my_node_info(const struct my_node_info *info)
     }
 
     printk("\n[MyNodeInfo]\n");
-    printk("  node_num:      %u\n", (unsigned int)info->node_num);
+    printk("  node_num:      %u\n", (unsigned int)info->num);
     printk("  reboot_count:  %u\n", (unsigned int)info->reboot_count);
     printk("  nodedb_count:  %u\n", (unsigned int)info->nodedb_count);
     if (info->pio_env[0] != '\0') {
@@ -182,7 +189,7 @@ void print_node_history(struct nodeHistory *node_history)
     printk("\n=== Node History (total %zu nodes) ===\n", count);
 
     for (size_t i = 0; i < count; i++) {
-        struct node node_copy;
+        struct node_info node_copy;
 
         //Breifly aquire lock before accessing specific node from history
         k_spinlock_key_t key = k_spin_lock(&node_history->lock);
@@ -214,7 +221,7 @@ void print_node_history_brief(struct nodeHistory *node_history)
     }
 
     for (size_t i = 0; i < count; i++) {
-        struct node node_copy;
+        struct node_info node_copy;
 
         //Breifly aquire lock before accessing specific node from history
         k_spinlock_key_t key = k_spin_lock(&node_history->lock);
