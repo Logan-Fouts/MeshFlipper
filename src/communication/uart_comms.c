@@ -119,7 +119,7 @@ static meshtastic_FromRadio *rx_consume_byte(uint8_t c)
             rx_frame[rx_pos++] = c;
 
             if ((rx_pos - 4) >= rx_expected_len) {
-                meshtastic_FromRadio *msg = decode_from_radio(&rx_frame[4], rx_expected_len); // This may be heavy to be in isr callback
+                meshtastic_FromRadio *msg = decode_from_radio(&rx_frame[4], rx_expected_len);
                 rx_reset();
                 if (msg != NULL) {
                     return msg;
@@ -207,6 +207,7 @@ int send_message_to_node(int node_num, const char *text, uint32_t my_node_num)
 void uart_cb(const struct device *dev, void *user_data)
 {
     // User data not needed for ring buffer operations
+    uint32_t start_cycles = k_cycle_get_32();
     (void)user_data;
     
     uart_irq_update(dev);
@@ -236,6 +237,18 @@ void uart_cb(const struct device *dev, void *user_data)
         // Add to ring buffer (this handles the copy and semaphore)
         if (!ring_buffer_put(&msg_ring_buffer, msg)) {
             rx_frames_dropped++;
+        }
+
+        // Check how long the ISR took and print a warning if it exceeds 100 microseconds
+        if (msg != NULL) {
+            uint32_t end_cycles = k_cycle_get_32();
+            uint32_t cycles_taken = end_cycles - start_cycles;
+            uint32_t freq = sys_clock_hw_cycles_per_sec();
+            uint32_t duration_us = (cycles_taken * 1000000) / freq;
+            
+            if (duration_us > 100) {
+                printk("WARNING: ISR took %u us!\n", duration_us);
+            } 
         }
     }
 }
