@@ -71,6 +71,7 @@ void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
         printk("╠══════════════════════════════════════════════════════════════╣\n");
         printk("║ Message Store                                                 \n");
         printk("║   • Total messages   : %-8zu                                   \n", message_history.count);
+        printk("║   • Total nodes      : %-8zu                                   \n", node_list.count);
         printk("╚══════════════════════════════════════════════════════════════╝\n");
 
         // ========== MESSAGE HISTORY (all messages) ==========
