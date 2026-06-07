@@ -59,10 +59,30 @@ void print_message_history(struct messageHistory *mes_history)
         msg_copy = mes_history->messages[i];
         k_spin_unlock(&mes_history->lock, key);
 
-        printk("Message: id=%d from=%d to=%d text=%s\n",
-                msg_copy.id,
-                msg_copy.from,
-                msg_copy.to,
-                msg_copy.text);
+        print_message(&msg_copy);
     }
+}
+
+
+
+struct message* find_message_by_id(struct messageHistory *mes_history, int id)
+{
+    if (mes_history == NULL || mes_history->count == 0) {
+        return NULL;
+    }
+
+    for (int i = 0; i < mes_history->count; i++) {
+        struct message *msg_ptr;
+
+        //Breifly aquire lock before accessing specific mesage from history
+        k_spinlock_key_t key = k_spin_lock(&mes_history->lock);
+        msg_ptr = &mes_history->messages[i];
+        k_spin_unlock(&mes_history->lock, key);
+
+        if (msg_ptr->id == id) {
+            return msg_ptr;
+        }
+    }
+
+    return NULL;
 }

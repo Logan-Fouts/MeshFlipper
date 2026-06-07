@@ -11,6 +11,8 @@
 #include "communication/manage_pb.h"
 
 #include "models/message.h"
+#include "models/node.h"
+#include "cb_args.h"
 
 #define RX_FRAME_MAX 512
 #define MESHTASTIC_START1 0x94 // First start byte for Meshtastic frames. Used to identify the beginning of a new frame in the UART data stream.
@@ -162,7 +164,9 @@ int send_want_config(void)
 // UART interrupt callback function to handle incoming data, read raw bytes and assemble one Meshtastic frame.
 void uart_cb(const struct device *dev, void *user_data)
 {
-    struct messageHistory *message_history = (struct messageHistory *)user_data;
+    struct cb_args *args = (struct cb_args *)user_data;
+    struct messageHistory *message_history = args->message_history;
+    struct nodeHistory *node_list = args->node_list;
     uart_irq_update(dev);
 
     while (uart_irq_rx_ready(dev)) {
@@ -189,7 +193,12 @@ void uart_cb(const struct device *dev, void *user_data)
         }
         rx_frames_received++;
 
-        // TODO: This is really ugly
+        if (msg->which_payload_variant == meshtastic_FromRadio_my_info_tag ||
+            msg->which_payload_variant == meshtastic_FromRadio_node_info_tag) {
+            update_node_history(node_list, msg);
+        }
+
+        // TODO: This is really ugly Check for text message app packets and if we get one, parse it and store it in the message history. We want to avoid doing too much work in the ISR, so we should just store the raw message for now and do the parsing in a separate thread later.
         if (msg->which_payload_variant == meshtastic_FromRadio_packet_tag &&
             msg->packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
             msg->packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {

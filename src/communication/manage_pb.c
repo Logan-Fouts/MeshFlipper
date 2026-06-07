@@ -23,10 +23,13 @@ meshtastic_FromRadio *decode_from_radio(const uint8_t *payload, size_t len)
 
     // Handle the different payload variants of the FromRadio message.
     switch (msg.which_payload_variant) {
-    // TODO: handle case
+    // TODO: handle cases
     case meshtastic_FromRadio_my_info_tag:
-        // printk("[FromRadio] MyNodeInfo: node_num=%u\n",
-            //    (unsigned int)msg.my_info.my_node_num);
+        // printk("[FromRadio] MyNodeInfo: deviceid=%u, node_num=%u, reboot_count=%u, nodedb_count=%u\n",
+        //        (uint8_t)msg.my_info.device_id.bytes[3], // Last 4 bytes of device_id
+        //        (unsigned int)msg.my_info.my_node_num,
+        //        (unsigned int)msg.my_info.reboot_count,
+        //        (unsigned int)msg.my_info.nodedb_count);
         break;
 
     case meshtastic_FromRadio_node_info_tag:

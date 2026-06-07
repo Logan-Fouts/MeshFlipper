@@ -10,11 +10,13 @@
 #include "models/message.h"
 #include "communication/manage_pb.h"
 #include "communication/uart_comms.h"
-
+#include "cb_args.h"
 
 
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 struct messageHistory message_history = { .count = 0 };
+struct nodeHistory node_list = { .count = 0 };
+struct cb_args user_cb_args = { .message_history = &message_history, .node_list = &node_list };
 
 int setup()
 {
@@ -23,8 +25,8 @@ int setup()
         return 0;
     }
 
-    // Pass is messages list and count to the UART callback so it can store incoming messages for later retrieval.
-    if (uart_irq_callback_user_data_set(uart_dev, uart_cb, &message_history) < 0) {
+    // Pass messages list and node list to the UART callback so it can store incoming messages for later retrieval.
+    if (uart_irq_callback_user_data_set(uart_dev, uart_cb, &user_cb_args) < 0) {
         printk("Error: cannot set UART callback\n");
         return 0;
     }
@@ -52,7 +54,13 @@ int main(void)
         return -1;
     }
 
-    // TODO: Not sure if sending want more than at the begining is really needed, but was stuggling with reciveing packet stability.
+    k_sleep(K_SECONDS(2));
+    print_my_node_info(&node_list.my_info);
+
+    printk("Node history: %zu nodes stored\n", node_list.count);
+    print_node_history_brief(&node_list);
+
+    // TODO: Needs testing. Not sure if sending want more than at the begining is really needed, but was stuggling with reciveing packet stability.
     const int64_t want_config_interval_ms = 5LL * 60LL * 1000LL;
     int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
      
