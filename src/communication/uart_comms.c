@@ -51,13 +51,15 @@ int send_meshtastic_frame(const uint8_t *payload, size_t payload_len)
 
     header[0] = MESHTASTIC_START1;
     header[1] = MESHTASTIC_START2;
-    header[2] = (uint8_t)((payload_len >> 8) & 0xFF);
-    header[3] = (uint8_t)(payload_len & 0xFF);
+    header[2] = (uint8_t)((payload_len >> 8) & 0xFF); // ms byte
+    header[3] = (uint8_t)(payload_len & 0xFF); // ls byte
    
+    // Send header over uart device
     for (size_t i = 0; i < sizeof(header); i++) {
         uart_poll_out(uart_dev, header[i]);
     }
 
+    // Send payload over uart device
     for (size_t i = 0; i < payload_len; i++) {
         uart_poll_out(uart_dev, payload[i]);
     }
@@ -161,6 +163,7 @@ int send_message_to_node(int node_num, const char *text, uint32_t my_node_num)
         return -EAGAIN;
     }
 
+    // If dest provided is zero broadcast it
     uint32_t dest;
     if (node_num == 0) {
         dest = 0xFFFFFFFFu;
@@ -170,27 +173,33 @@ int send_message_to_node(int node_num, const char *text, uint32_t my_node_num)
 
     static uint32_t next_packet_id = 0;
 
+    // Build text message packet with provided detials
     meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
-    
     msg.which_payload_variant = meshtastic_ToRadio_packet_tag; 
+    msg.packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
     msg.packet.id = next_packet_id++;
     msg.packet.from = 0;
     msg.packet.to = dest;
     msg.packet.want_ack = true;
     msg.packet.priority = meshtastic_MeshPacket_Priority_RELIABLE;
-    msg.packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
     msg.packet.decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
     msg.packet.decoded.want_response = false;
 
-    if (text_len > sizeof(msg.packet.decoded.payload.bytes))
-        text_len = sizeof(msg.packet.decoded.payload.bytes);
+    // If message too long change length to size of payload bytes
+    if (text_len > sizeof(msg.packet.decoded.payload.bytes)) {
+        printk("Message too long! Cannot send\n");
+        return -1;
+    }
 
+    // Copy text with text_len into the msg packet
     memcpy(msg.packet.decoded.payload.bytes, text, text_len);
     msg.packet.decoded.payload.size = text_len;
 
+    // Create buffer to store message packet and use it to get a pb_ostream_t
     uint8_t buf[meshtastic_ToRadio_size];
     pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
 
+    // Encode the msg struct into the ToRadio protobuf format
     if (!pb_encode(&stream, meshtastic_ToRadio_fields, &msg)) {
         printk("ToRadio encode failed: %s\n", PB_GET_ERROR(&stream));
         return -EIO;
@@ -201,6 +210,7 @@ int send_message_to_node(int node_num, const char *text, uint32_t my_node_num)
            (unsigned int)msg.packet.to,
            (unsigned int)stream.bytes_written);
 
+    // Send frame from buf
     return send_meshtastic_frame(buf, stream.bytes_written);
 }
 
