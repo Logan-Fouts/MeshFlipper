@@ -187,35 +187,27 @@ int send_message_to_node(int node_num, const char *text, uint32_t my_node_num)
 
     static uint32_t next_packet_id = 0;
 
-    // 1. Initialize ToRadio using zero initialization
     meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
     
-    // Explicitly toggle the root union option to parse the packet
     msg.which_payload_variant = meshtastic_ToRadio_packet_tag; 
 
-    // 2. Set the base fields inside the active packet union frame
     msg.packet.id = next_packet_id++;
-    msg.packet.from = 0; // Firmware auto-injects local node ID
+    msg.packet.from = 0;
     msg.packet.to = dest;
     msg.packet.want_ack = true;
     msg.packet.priority = meshtastic_MeshPacket_Priority_RELIABLE;
 
-    // 3. FIX: Toggle the packet payload variant field instead of 'has_decoded'
     msg.packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
 
-    // 4. Configure the inner data payload tracking
     msg.packet.decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
     msg.packet.decoded.want_response = false;
 
-    // Verify raw size parameters safely against your structure's maximum size
     if (text_len > sizeof(msg.packet.decoded.payload.bytes))
         text_len = sizeof(msg.packet.decoded.payload.bytes);
 
-    // 5. Populate text parameters safely
     memcpy(msg.packet.decoded.payload.bytes, text, text_len);
     msg.packet.decoded.payload.size = text_len;
 
-    // Encode payload bytes down to stream format
     uint8_t buf[meshtastic_ToRadio_size];
     pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
 

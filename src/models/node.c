@@ -179,6 +179,8 @@ void print_node_history(struct nodeHistory *node_history)
         return;
     }
 
+    printk("\n=== Node History (total %zu nodes) ===\n", count);
+
     for (size_t i = 0; i < count; i++) {
         struct node node_copy;
 
