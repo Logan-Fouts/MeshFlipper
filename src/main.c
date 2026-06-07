@@ -60,10 +60,24 @@ int main(void)
     printk("Node history: %zu nodes stored\n", node_list.count);
     print_node_history_brief(&node_list);
 
+    // Wait briefly for MyNodeInfo to arrive before trying to send outbound traffic.
+    for (int i = 0; i < 20 && !node_list.my_info.valid; i++) {
+        k_sleep(K_MSEC(250));
+    }
+
+    print_my_node_info(&node_list.my_info);
+
+
     // TODO: Needs testing. Not sure if sending want more than at the begining is really needed, but was stuggling with reciveing packet stability.
     const int64_t want_config_interval_ms = 5LL * 60LL * 1000LL;
     int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
-     
+
+    int node_num = -160769812;
+
+    k_sleep(K_SECONDS(2));
+    int ret = send_message_to_node(node_num, "gn mesh", node_list.my_info.node_num);
+    printk("send_message_to_node returned %d\n", ret);
+
     while (1) {
         k_sleep(K_SECONDS(10));
 
@@ -79,6 +93,15 @@ int main(void)
 
         printk("Message history: %zu messages stored\n", message_history.count);
         print_message_history(&message_history);
+
+        printk("Find messages sent to node: %d\n", node_num);
+        size_t found_count;
+        struct message **found_messages = find_my_messages_sent_to_node(&message_history, node_num, &found_count);
+        printk("Found %zu messages sent to node %d\n", found_count, node_num);
+        for (size_t i = 0; i < found_count; i++) {
+            print_message(found_messages[i]);
+        }
+        k_free(found_messages);
     }
 
     return 0;

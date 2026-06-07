@@ -9,6 +9,9 @@
 #include "meshtastic/mesh.pb.h"
 #include "communication/uart_comms.h"
 #include "communication/manage_pb.h"
+#include "models/message.h"
+#include "models/node.h"
+#include "cb_args.h"
 
 #include "models/message.h"
 #include "models/node.h"
@@ -161,6 +164,75 @@ int send_want_config(void)
     return send_meshtastic_frame(buf, stream.bytes_written);
 }
 
+int send_message_to_node(int node_num, const char *text, uint32_t my_node_num)
+{
+    if (text == NULL)
+        return -EINVAL;
+
+    size_t text_len = strlen(text);
+    if (text_len == 0)
+        return -EINVAL;
+
+    if (my_node_num == 0) {
+        printk("Cannot send: my_node_num is not initialized yet\n");
+        return -EAGAIN;
+    }
+
+    uint32_t dest;
+    if (node_num == 0) {
+        dest = 0xFFFFFFFFu; // Broadcast
+    } else {
+        dest = (uint32_t)node_num;
+    }
+
+    static uint32_t next_packet_id = 0;
+
+    // 1. Initialize ToRadio using zero initialization
+    meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
+    
+    // Explicitly toggle the root union option to parse the packet
+    msg.which_payload_variant = meshtastic_ToRadio_packet_tag; 
+
+    // 2. Set the base fields inside the active packet union frame
+    msg.packet.id = next_packet_id++;
+    msg.packet.from = 0; // Firmware auto-injects local node ID
+    msg.packet.to = dest;
+    msg.packet.want_ack = true;
+    msg.packet.priority = meshtastic_MeshPacket_Priority_RELIABLE;
+
+    // 3. FIX: Toggle the packet payload variant field instead of 'has_decoded'
+    msg.packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+
+    // 4. Configure the inner data payload tracking
+    msg.packet.decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+    msg.packet.decoded.want_response = false;
+
+    // Verify raw size parameters safely against your structure's maximum size
+    if (text_len > sizeof(msg.packet.decoded.payload.bytes))
+        text_len = sizeof(msg.packet.decoded.payload.bytes);
+
+    // 5. Populate text parameters safely
+    memcpy(msg.packet.decoded.payload.bytes, text, text_len);
+    msg.packet.decoded.payload.size = text_len;
+
+    // Encode payload bytes down to stream format
+    uint8_t buf[meshtastic_ToRadio_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
+
+    if (!pb_encode(&stream, meshtastic_ToRadio_fields, &msg)) {
+        printk("ToRadio encode failed: %s\n", PB_GET_ERROR(&stream));
+        return -EIO;
+    }
+
+    printk("TX queued: id=%u to=%u len=%u\n",
+           (unsigned int)msg.packet.id,
+           (unsigned int)msg.packet.to,
+           (unsigned int)stream.bytes_written);
+
+    return send_meshtastic_frame(buf, stream.bytes_written);
+}
+
+
 // UART interrupt callback function to handle incoming data, read raw bytes and assemble one Meshtastic frame.
 void uart_cb(const struct device *dev, void *user_data)
 {
@@ -193,6 +265,14 @@ void uart_cb(const struct device *dev, void *user_data)
         }
         rx_frames_received++;
 
+        if (msg->which_payload_variant == meshtastic_FromRadio_queueStatus_tag) {
+            printk("QueueStatus: res=%d free=%u/%u mesh_packet_id=%u\n",
+                   (int)msg->queueStatus.res,
+                   (unsigned int)msg->queueStatus.free,
+                   (unsigned int)msg->queueStatus.maxlen,
+                   (unsigned int)msg->queueStatus.mesh_packet_id);
+        }
+
         if (msg->which_payload_variant == meshtastic_FromRadio_my_info_tag ||
             msg->which_payload_variant == meshtastic_FromRadio_node_info_tag) {
             update_node_history(node_list, msg);
@@ -202,17 +282,9 @@ void uart_cb(const struct device *dev, void *user_data)
         if (msg->which_payload_variant == meshtastic_FromRadio_packet_tag &&
             msg->packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
             msg->packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
-            struct message parsed_msg = parse_message(msg);
-            k_spinlock_key_t key = k_spin_lock(&message_history->lock);
-            if (message_history->count < MAX_MESSAGE_HISTORY) {
-                message_history->messages[message_history->count++] = parsed_msg;
-            } else {
-                message_history->messages[message_history->count % MAX_MESSAGE_HISTORY] = parsed_msg;
-                message_history->count++;
-            }
-            k_spin_unlock(&message_history->lock, key);
+            update_message_history(message_history, msg);
         } else if (msg->which_payload_variant == meshtastic_FromRadio_packet_tag &&
-                   msg->packet.which_payload_variant != meshtastic_MeshPacket_decoded_tag) {
+            msg->packet.which_payload_variant != meshtastic_MeshPacket_decoded_tag) {
             // Keep ISR work minimal. Logging each encrypted packet here can starve RX.
         }
     }
