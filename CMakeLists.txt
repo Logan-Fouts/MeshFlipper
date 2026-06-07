@@ -39,6 +39,7 @@ target_sources(
     src/models/message.c
     src/communication/manage_pb.c
     src/communication/uart_comms.c
+    src/communication/ring_buffer.c
 )
 
 target_include_directories(

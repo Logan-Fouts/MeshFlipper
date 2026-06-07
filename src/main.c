@@ -10,12 +10,19 @@
 #include "models/message.h"
 #include "communication/manage_pb.h"
 #include "communication/uart_comms.h"
+#include "communication/ring_buffer.h"
 #include "cb_args.h"
-
 
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 
-// Initialize message history and node list with zero count and default values. These will be populated as messages and nodes are received from the radio.
+// Ring buffer instance (global so uart_comms.c can access it via extern)
+ring_buffer_t msg_ring_buffer;
+
+// Thread stack and control block for message processing
+K_THREAD_STACK_DEFINE(msg_task_stack, 4096);
+static struct k_thread msg_task_thread;
+
+// Initialize message history and node list with zero count and default values.
 struct messageHistory message_history = { .count = 0 };
 struct nodeHistory node_list = { .count = 0 };
 struct cb_args user_cb_args = { .message_history = &message_history, .node_list = &node_list };
@@ -27,18 +34,18 @@ int setup()
         return 0;
     }
 
-    // Pass messages list and node list to the UART callback so it can store incoming messages for later retrieval.
+    // Pass messages list and node list to the UART callback
     if (uart_irq_callback_user_data_set(uart_dev, uart_cb, &user_cb_args) < 0) {
         printk("Error: cannot set UART callback\n");
         return 0;
     }
 
-    // Enable RX interrupts to start receiving data. The callback will handle data as it comes in and assemble complete frames.
+    // Enable RX interrupts
     uart_irq_rx_enable(uart_dev);
 
     printk("UART listener ready on uart0 @ 115200. Waiting for Meshtastic frames.\n");
 
-    // Send a want_config_id message to the radio to trigger the radio to send its config and node db on startup.
+    // Send want_config_id to trigger radio to send config and node db
     if (send_want_config() < 0) {
         printk("Error: failed to send want_config message\n");
         return 0;
@@ -47,10 +54,41 @@ int setup()
     return 1;
 }
 
+void process_messages_task(void)
+{
+    meshtastic_FromRadio msg;
+    
+    while (1) {
+        // Wait for a message indefinitely
+        if (ring_buffer_wait(&msg_ring_buffer, K_FOREVER)) {
+            // Get all available messages
+            while (ring_buffer_get(&msg_ring_buffer, &msg)) {
+                // Process the message
+                if (msg.which_payload_variant == meshtastic_FromRadio_queueStatus_tag) {
+                    printk("QueueStatus: res=%d free=%u/%u mesh_packet_id=%u\n",
+                            (int)msg.queueStatus.res,
+                            (unsigned int)msg.queueStatus.free,
+                            (unsigned int)msg.queueStatus.maxlen,
+                            (unsigned int)msg.queueStatus.mesh_packet_id);
+                }
+
+                if (msg.which_payload_variant == meshtastic_FromRadio_my_info_tag ||
+                    msg.which_payload_variant == meshtastic_FromRadio_node_info_tag) {
+                    update_node_history(&node_list, &msg);
+                }
+
+                if (msg.which_payload_variant == meshtastic_FromRadio_packet_tag &&
+                    msg.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+                    msg.packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
+                    update_message_history(&message_history, &msg);
+                }
+            }
+        }
+    }
+}
+
 void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
 {
-    int node_num = -160769812;
-
     while (1) {
         k_sleep(K_SECONDS(10));
 
@@ -69,13 +107,14 @@ void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
         printk("║   • Frames received : %-8zu                                   \n", rx_frames_received);
         printk("║   • Frames dropped   : %-8zu                                   \n", rx_frames_dropped);
         printk("║   • Bytes processed  : %-8zu                                   \n", rx_bytes_processed);
+        printk("║   • Ring buffer drops: %-8zu                                   \n", ring_buffer_get_dropped(&msg_ring_buffer));
         printk("╠══════════════════════════════════════════════════════════════╣\n");
         printk("║ Message Store                                                 \n");
         printk("║   • Total messages   : %-8zu                                   \n", message_history.count);
         printk("║   • Total nodes      : %-8zu                                   \n", node_list.count);
         printk("╚══════════════════════════════════════════════════════════════╝\n");
 
-        // ========== MESSAGE HISTORY (all messages) ==========
+        // ========== MESSAGE HISTORY ==========
         if (message_history.count > 0) {
             printk("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             printk("  COMPLETE MESSAGE HISTORY (%zu messages)\n", message_history.count);
@@ -84,8 +123,6 @@ void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
         } else {
             printk("\n  No messages received yet.\n");
         }
-
-        printk("\nNext report in 10 seconds...\n");
     }
 }
 
@@ -93,13 +130,21 @@ int main(void)
 {
     printk("Starting MeshFlipper...\n");
 
+    ring_buffer_init(&msg_ring_buffer);
+
     if (setup() == 0) {
         printk("Setup failed. Exiting.\n");
         return -1;
     }
 
+    // Create message processing thread
+    k_thread_create(&msg_task_thread, msg_task_stack,
+        K_THREAD_STACK_SIZEOF(msg_task_stack),
+        (k_thread_entry_t)process_messages_task,
+        NULL, NULL, NULL,
+        K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
 
-    // Wait briefly for MyNodeInfo to arrive before trying to send outbound traffic.
+    // Wait for MyNodeInfo to arrive
     for (int i = 0; i < 20 && !node_list.my_info.valid; i++) {
         k_sleep(K_MSEC(250));
     }
@@ -108,19 +153,18 @@ int main(void)
     k_sleep(K_SECONDS(5));
     print_node_history_brief(&node_list);
 
-
-    // Periodically send want config id to get all updates
-    const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // Use long long to avoid overflow
+    // Periodically send want_config_id
+    const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // 2 minutes
     int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
 
-
-    // TODO: (Remove) Test sending a message to a specific node. 
+    // Test sending a message
     k_sleep(K_SECONDS(3));
     int node_num = -160769812;
     int ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num);
-
-
-    print_node_history(&node_list);
+    
+    if (ret < 0) {
+        printk("Failed to send test message: %d\n", ret);
+    }
 
     run_loop(next_want_config_ms, want_config_interval_ms);
 
