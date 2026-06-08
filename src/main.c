@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <string.h>
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/uart.h>
 
 #include "models/node.h"
@@ -16,6 +17,14 @@
 #include "cb_args.h"
 
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
+static const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+
+#define BUTTON_PREV_PIN 2
+#define BUTTON_PRIMARY_PIN 3
+#define BUTTON_NEXT_PIN 4
+#define BUTTON_SECONDARY_PIN 5
+#define BUTTON_POLL_MS 60
+#define BUTTON_HOME_HOLD_MS 700
 
 // Ring buffer instance (global so uart_comms.c can access it via extern)
 ring_buffer_t msg_ring_buffer;
@@ -28,6 +37,42 @@ static struct k_thread msg_task_thread;
 struct messageHistory message_history = { .count = 0 };
 struct nodeHistory node_list = { .count = 0 };
 struct cb_args user_cb_args = { .message_history = &message_history, .node_list = &node_list };
+
+struct button_state {
+    uint8_t pin;
+    int last_level;
+    int64_t pressed_since_ms;
+    bool long_press_handled;
+};
+
+static struct button_state buttons[] = {
+    { .pin = BUTTON_PREV_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
+    { .pin = BUTTON_PRIMARY_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
+    { .pin = BUTTON_NEXT_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
+    { .pin = BUTTON_SECONDARY_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
+};
+
+static int configure_button_inputs(void)
+{
+    if (!device_is_ready(gpio_dev)) {
+        printk("Error: GPIO device is not ready\n");
+        return -ENODEV;
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(buttons); i++) {
+        int ret = gpio_pin_configure(gpio_dev, buttons[i].pin, GPIO_INPUT | GPIO_PULL_UP);
+        if (ret < 0) {
+            printk("Error: failed to configure GPIO%u (%d)\n", buttons[i].pin, ret);
+            return ret;
+        }
+
+        buttons[i].last_level = gpio_pin_get(gpio_dev, buttons[i].pin);
+        buttons[i].pressed_since_ms = 0;
+        buttons[i].long_press_handled = false;
+    }
+
+    return 0;
+}
 
 static bool wait_for_my_node_info(int timeout_ms)
 {
@@ -79,6 +124,9 @@ int setup()
 
     ring_buffer_init(&msg_ring_buffer);
 
+    if (configure_button_inputs() < 0) {
+        return 0;
+    }
 
     return 1;
 }
@@ -109,6 +157,10 @@ void process_messages_task(void)
                 if (msg.which_payload_variant == meshtastic_FromRadio_packet_tag &&
                     msg.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
                     msg.packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
+                    if (node_list.my_info.valid && msg.packet.from == node_list.my_info.num) {
+                        continue;
+                    }
+
                     update_message_history(&message_history, &msg);
                     int ret = screen_ui_refresh(&message_history, &node_list);
                     if (ret < 0) {
@@ -120,16 +172,108 @@ void process_messages_task(void)
     }
 }
 
+static void poll_buttons_and_drive_ui(void)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(buttons); i++) {
+        int level = gpio_pin_get(gpio_dev, buttons[i].pin);
+        if (level < 0) {
+            continue;
+        }
+
+        int previous_level = buttons[i].last_level;
+        bool falling_edge = (previous_level > 0 && level == 0);
+        bool rising_edge = (previous_level == 0 && level > 0);
+        bool is_secondary = (buttons[i].pin == BUTTON_SECONDARY_PIN);
+
+        if (falling_edge) {
+            buttons[i].pressed_since_ms = k_uptime_get();
+            buttons[i].long_press_handled = false;
+        }
+
+        if (is_secondary && level == 0 && !buttons[i].long_press_handled &&
+            buttons[i].pressed_since_ms > 0 &&
+            (k_uptime_get() - buttons[i].pressed_since_ms) >= BUTTON_HOME_HOLD_MS) {
+            int ui_ret = screen_ui_handle_action(&message_history, &node_list, SCREEN_UI_ACTION_HOME);
+            if (ui_ret < 0) {
+                printk("UI home action failed: %d\n", ui_ret);
+            }
+            buttons[i].long_press_handled = true;
+        }
+        buttons[i].last_level = level;
+
+        if (rising_edge) {
+            buttons[i].pressed_since_ms = 0;
+        }
+
+        bool trigger_action = false;
+        if (is_secondary) {
+            trigger_action = rising_edge && !buttons[i].long_press_handled;
+        } else {
+            trigger_action = falling_edge;
+        }
+
+        if (!trigger_action) {
+            continue;
+        }
+
+        enum screen_ui_action action;
+        if (buttons[i].pin == BUTTON_PREV_PIN) {
+            action = SCREEN_UI_ACTION_PREVIOUS;
+        } else if (buttons[i].pin == BUTTON_NEXT_PIN) {
+            action = SCREEN_UI_ACTION_NEXT;
+        } else if (buttons[i].pin == BUTTON_PRIMARY_PIN) {
+            action = SCREEN_UI_ACTION_PRIMARY;
+        } else {
+            action = SCREEN_UI_ACTION_SECONDARY;
+        }
+
+        int ui_ret = screen_ui_handle_action(&message_history, &node_list, action);
+        if (ui_ret < 0) {
+            printk("UI action failed: %d\n", ui_ret);
+        }
+
+        struct screen_ui_outgoing outgoing;
+        if (!screen_ui_take_outgoing(&outgoing) || !outgoing.valid) {
+            continue;
+        }
+
+        if (!node_list.my_info.valid) {
+            printk("Cannot send yet: my node info not ready\n");
+            screen_ui_refresh(&message_history, &node_list);
+            continue;
+        }
+
+        int send_ret = send_message_to_node(outgoing.target_node,
+                                            outgoing.text,
+                                            node_list.my_info.num,
+                                            &message_history);
+        if (send_ret < 0) {
+            printk("Send failed: %d\n", send_ret);
+        }
+
+        screen_ui_refresh(&message_history, &node_list);
+    }
+}
+
 void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
 {
+    int64_t next_stats_ms = k_uptime_get() + 10000;
+
     while (1) {
-        k_sleep(K_SECONDS(10));
+        k_sleep(K_MSEC(BUTTON_POLL_MS));
+        poll_buttons_and_drive_ui();
 
         int64_t now_ms = k_uptime_get();
         if (now_ms >= next_want_config_ms) {
             send_want_config();
             next_want_config_ms = now_ms + want_config_interval_ms;
         }
+
+        if (now_ms < next_stats_ms) {
+            continue;
+        }
+
+        next_stats_ms = now_ms + 10000;
 
         // ========== STATISTICS SECTION ==========
         printk("\n\n");
@@ -156,7 +300,6 @@ void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
         } else {
             printk("\n  No messages received yet.\n");
         }
-
     }
 }
 
@@ -187,14 +330,6 @@ int main(void)
 
     print_my_node_info(&node_list.my_info);
 
-    if (node_list.my_info.valid) {
-        int node_num = -160769812;
-        int ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num, &message_history);
-        if (ret < 0) {
-            printk("Startup test send failed: %d\n", ret);
-        }
-    }
-    
     // Periodically send want_config_id
     const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // 2 minutes
     int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;

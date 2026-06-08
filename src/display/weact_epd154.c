@@ -15,11 +15,15 @@
 #define EPD_HEIGHT 200
 #define EPD_BUF_SIZE ((EPD_WIDTH * EPD_HEIGHT) / 8)
 #define MAX_MESSAGES 5
+#define INBOX_VISIBLE_ROWS 4
+#define POPUP_DURATION_MS 1800
 
 // Message history for UI
 static struct {
     int32_t id;
-    char text[64];
+    int32_t from_num;
+    int32_t to_num;
+    char text[256];
     char from_name[40];
     uint64_t time;
 } message_history[MAX_MESSAGES];
@@ -65,6 +69,106 @@ static struct spi_config epd_spi_cfg = {
 };
 
 static uint8_t epd_frame[EPD_BUF_SIZE];
+static void epd_draw_text(int x, int y, int scale, bool bold, const char *text);
+
+static void epd_draw_text_limited(int x, int y, int scale, bool bold, const char *text, size_t max_chars)
+{
+    if (text == NULL || max_chars == 0) {
+        return;
+    }
+
+    char line[96];
+    size_t limit = max_chars;
+    if (limit > sizeof(line) - 2) {
+        limit = sizeof(line) - 2;
+    }
+
+    size_t text_len = strnlen(text, limit + 1);
+    bool truncated = text_len > limit;
+    size_t copy_len = truncated ? limit : text_len;
+
+    memcpy(line, text, copy_len);
+    line[copy_len] = '\0';
+
+    if (truncated && copy_len >= 1) {
+        if (copy_len >= 2) {
+            line[copy_len - 2] = '.';
+            line[copy_len - 1] = '.';
+        }
+    }
+
+    epd_draw_text(x, y, scale, bold, line);
+}
+
+static void epd_build_wrapped_preview(char *out,
+                                      size_t out_size,
+                                      const char *text,
+                                      size_t chars_per_line,
+                                      size_t max_lines)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+
+    out[0] = '\0';
+
+    if (text == NULL || chars_per_line == 0 || max_lines == 0) {
+        return;
+    }
+
+    size_t out_idx = 0;
+    size_t line = 0;
+    size_t col = 0;
+    bool truncated = false;
+
+    for (size_t i = 0; text[i] != '\0'; i++) {
+        char ch = text[i];
+
+        if (ch == '\n') {
+            if (line + 1 >= max_lines) {
+                truncated = true;
+                break;
+            }
+            if (out_idx + 1 >= out_size) {
+                truncated = true;
+                break;
+            }
+            out[out_idx++] = '\n';
+            line++;
+            col = 0;
+            continue;
+        }
+
+        if (col >= chars_per_line) {
+            if (line + 1 >= max_lines) {
+                truncated = true;
+                break;
+            }
+            if (out_idx + 1 >= out_size) {
+                truncated = true;
+                break;
+            }
+            out[out_idx++] = '\n';
+            line++;
+            col = 0;
+        }
+
+        if (out_idx + 1 >= out_size) {
+            truncated = true;
+            break;
+        }
+
+        out[out_idx++] = ch;
+        col++;
+    }
+
+    out[out_idx] = '\0';
+
+    if (truncated && out_idx >= 2) {
+        out[out_idx - 2] = '.';
+        out[out_idx - 1] = '.';
+    }
+}
 
 static int epd_write_raw(const uint8_t *data, size_t len)
 {
@@ -260,6 +364,7 @@ static bool epd_get_glyph(char ch, uint8_t glyph[5])
     case ')': glyph[0] = 0x00; glyph[1] = 0x41; glyph[2] = 0x22; glyph[3] = 0x1C; glyph[4] = 0x00; return true;
     case '_': glyph[0] = 0x40; glyph[1] = 0x40; glyph[2] = 0x40; glyph[3] = 0x40; glyph[4] = 0x40; return true;
     case '\'': glyph[0] = 0x00; glyph[1] = 0x03; glyph[2] = 0x00; glyph[3] = 0x00; glyph[4] = 0x00; return true;
+    case '#': glyph[0] = 0x14; glyph[1] = 0x7F; glyph[2] = 0x14; glyph[3] = 0x7F; glyph[4] = 0x14; return true;
     default:
         glyph[0] = 0x02; glyph[1] = 0x01; glyph[2] = 0x51; glyph[3] = 0x09; glyph[4] = 0x06;
         return false;
@@ -355,8 +460,12 @@ static int epd_refresh_framebuffer(void)
     return epd_wait_busy(5000);
 }
 
-// Add a message to history
-static void add_to_history(int32_t msg_id, const char *message, const char *from_name)
+// Add a message to history, returns true when a new row is created.
+static bool add_to_history(int32_t msg_id,
+                           const char *message,
+                           const char *from_name,
+                           int32_t from_num,
+                           int32_t to_num)
 {
     if (msg_id != 0 && message_count > 0 && message_history[message_count - 1].id == msg_id) {
         strncpy(message_history[message_count - 1].text, message, sizeof(message_history[0].text) - 1);
@@ -367,9 +476,11 @@ static void add_to_history(int32_t msg_id, const char *message, const char *from
             strncpy(message_history[message_count - 1].from_name, from_name, sizeof(message_history[0].from_name) - 1);
         }
         message_history[message_count - 1].from_name[sizeof(message_history[0].from_name) - 1] = '\0';
+        message_history[message_count - 1].from_num = from_num;
+        message_history[message_count - 1].to_num = to_num;
         message_history[message_count - 1].time = k_uptime_get();
         current_display_index = message_count - 1;
-        return;
+        return false;
     }
 
     // Shift messages if full
@@ -382,6 +493,8 @@ static void add_to_history(int32_t msg_id, const char *message, const char *from
     
     // Add new message
     message_history[message_count].id = msg_id;
+    message_history[message_count].from_num = from_num;
+    message_history[message_count].to_num = to_num;
     strncpy(message_history[message_count].text, message, sizeof(message_history[0].text) - 1);
     message_history[message_count].text[sizeof(message_history[0].text) - 1] = '\0';
     if (from_name == NULL || from_name[0] == '\0') {
@@ -393,49 +506,228 @@ static void add_to_history(int32_t msg_id, const char *message, const char *from
     message_history[message_count].time = k_uptime_get();
     message_count++;
     current_display_index = message_count - 1;
+    return true;
 }
 
-// Draw the main UI
+static bool is_broadcast_index(int idx)
+{
+    if (idx < 0 || idx >= message_count) {
+        return false;
+    }
+
+    return ((uint32_t)message_history[idx].to_num == 0xFFFFFFFFu);
+}
+
+static int build_inbox_indices(int out_indices[MAX_MESSAGES])
+{
+    int latest_broadcast = -1;
+    for (int i = 0; i < message_count; i++) {
+        if (is_broadcast_index(i)) {
+            latest_broadcast = i;
+        }
+    }
+
+    int per_node_latest[MAX_MESSAGES];
+    int per_node_count = 0;
+    int32_t seen_nodes[MAX_MESSAGES];
+    int seen_count = 0;
+
+    for (int i = message_count - 1; i >= 0 && per_node_count < MAX_MESSAGES; i--) {
+        if (is_broadcast_index(i)) {
+            continue;
+        }
+
+        int32_t node_id = message_history[i].from_num;
+        if (node_id == 0) {
+            node_id = message_history[i].to_num;
+        }
+
+        bool already_seen = false;
+        for (int s = 0; s < seen_count; s++) {
+            if (seen_nodes[s] == node_id) {
+                already_seen = true;
+                break;
+            }
+        }
+
+        if (already_seen) {
+            continue;
+        }
+
+        seen_nodes[seen_count++] = node_id;
+        per_node_latest[per_node_count++] = i;
+    }
+
+    int count = 0;
+    for (int i = per_node_count - 1; i >= 0 && count < MAX_MESSAGES; i--) {
+        out_indices[count++] = per_node_latest[i];
+    }
+
+    if (latest_broadcast >= 0) {
+        bool already_included = false;
+        for (int i = 0; i < count; i++) {
+            if (out_indices[i] == latest_broadcast) {
+                already_included = true;
+                break;
+            }
+        }
+
+        if (!already_included) {
+            if (count < MAX_MESSAGES) {
+                out_indices[count++] = latest_broadcast;
+            } else {
+                int oldest_pos = 0;
+                for (int i = 1; i < count; i++) {
+                    if (out_indices[i] < out_indices[oldest_pos]) {
+                        oldest_pos = i;
+                    }
+                }
+                out_indices[oldest_pos] = latest_broadcast;
+            }
+        }
+    }
+
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (out_indices[j] < out_indices[i]) {
+                int tmp = out_indices[i];
+                out_indices[i] = out_indices[j];
+                out_indices[j] = tmp;
+            }
+        }
+    }
+
+    return count;
+}
+
+static int inbox_selected_position(const int *inbox_indices, int inbox_count)
+{
+    for (int i = 0; i < inbox_count; i++) {
+        if (inbox_indices[i] == current_display_index) {
+            return i;
+        }
+    }
+
+    return inbox_count > 0 ? inbox_count - 1 : 0;
+}
+
+static int inbox_start_index(int selected_pos, int inbox_count)
+{
+    if (inbox_count <= INBOX_VISIBLE_ROWS) {
+        return 0;
+    }
+
+    int start = selected_pos - (INBOX_VISIBLE_ROWS - 1);
+    if (start < 0) {
+        start = 0;
+    }
+
+    int max_start = inbox_count - INBOX_VISIBLE_ROWS;
+    if (start > max_start) {
+        start = max_start;
+    }
+
+    return start;
+}
+
+static void draw_message_popup(int index)
+{
+    epd_draw_filled_rect(12, 46, EPD_WIDTH - 24, EPD_HEIGHT - 74, false);
+    epd_draw_rect(12, 46, EPD_WIDTH - 24, EPD_HEIGHT - 74, true);
+    epd_draw_hline(12, 66, EPD_WIDTH - 24, true);
+
+    epd_draw_text_centered(53, 1, true, "NEW MESSAGE");
+
+    char from_line[52];
+    snprintf(from_line, sizeof(from_line), "FROM %s", message_history[index].from_name);
+    epd_draw_text_limited(18, 72, 1, false, from_line, 28);
+
+    epd_draw_hline(16, 84, EPD_WIDTH - 32, true);
+
+    char popup_text[192];
+    size_t popup_chars_per_line = (size_t)((EPD_WIDTH - 36) / 6);
+    epd_build_wrapped_preview(popup_text,
+                              sizeof(popup_text),
+                              message_history[index].text,
+                              popup_chars_per_line,
+                              9);
+    epd_draw_text(18, 90, 1, true, popup_text);
+}
+
+// Draw the main inbox UI
 static void draw_ui(void)
 {
     epd_frame_clear();
+    int inbox_indices[MAX_MESSAGES];
+    int inbox_count = build_inbox_indices(inbox_indices);
+    int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+
+    if (inbox_count > 0) {
+        current_display_index = inbox_indices[selected_pos];
+    }
     
     // ===== TOP BAR =====
     // epd_draw_filled_rect(0, 0, EPD_WIDTH, 22, true);  // Black bar
-    epd_draw_text_centered(5, 1, false, "MESHFLIPPER"); // White text on black
+    epd_draw_text_centered(5, 1, false, "MESSAGES");
     epd_draw_hline(0, 23, EPD_WIDTH, true);            // Separator
     
     // ===== BOTTOM BAR =====
     epd_draw_hline(0, EPD_HEIGHT - 14, EPD_WIDTH, true);
     char status[32];
-    snprintf(status, sizeof(status), "MSGS: %d", message_count);
+    snprintf(status, sizeof(status), "INBOX: %d", inbox_count);
     epd_draw_text(4, EPD_HEIGHT - 11, 1, false, status);
     
     // Navigation arrows if multiple messages
-    if (message_count > 1) {
+    if (inbox_count > 1) {
         epd_draw_text(EPD_WIDTH - 24, EPD_HEIGHT - 11, 1, false, "< >");
-        char idx_str[8];
-        snprintf(idx_str, sizeof(idx_str), "%d/%d", current_display_index + 1, message_count);
+        char idx_str[16];
+        snprintf(idx_str, sizeof(idx_str), "%u/%u",
+                 (unsigned int)(selected_pos + 1),
+                 (unsigned int)inbox_count);
         epd_draw_text(EPD_WIDTH - 44, EPD_HEIGHT - 11, 1, false, idx_str);
     }
     
     // ===== CONTENT AREA =====
     epd_draw_rect(2, 26, EPD_WIDTH - 4, EPD_HEIGHT - 44, true);
     
-    if (message_count == 0) {
+    if (inbox_count == 0) {
         // No messages - show idle screen
         epd_draw_text_centered(EPD_HEIGHT / 2 - 20, 2, true, "NO MESSAGES");
-        epd_draw_text_centered(EPD_HEIGHT / 2, 1, false, "Waiting for mesh...");
-        epd_draw_text_centered(EPD_HEIGHT / 2 + 20, 1, false, "Send via GPIO3");
+        epd_draw_text_centered(EPD_HEIGHT / 2, 1, false, "GPIO3 Reply  GPIO5 Bcast");
+        epd_draw_text_centered(EPD_HEIGHT / 2 + 20, 1, false, "GPIO2/4 Select");
     } else {
-        // Show current message
-        char header[64];
-        snprintf(header, sizeof(header), "FROM: %s", message_history[current_display_index].from_name);
-        epd_draw_text(6, 32, 1, false, header);
-        epd_draw_hline(4, 44, EPD_WIDTH - 8, true);
-        
-        // Draw message text
-        epd_draw_text(6, 52, 2, true, message_history[current_display_index].text);
+        const int row_h = 36;
+        int start = inbox_start_index(selected_pos, inbox_count);
+        int rows = inbox_count - start;
+        if (rows > INBOX_VISIBLE_ROWS) {
+            rows = INBOX_VISIBLE_ROWS;
+        }
+
+        for (int i = 0; i < rows; i++) {
+            int visible_idx = start + i;
+            int idx = inbox_indices[visible_idx];
+            int row_y = 28 + (i * row_h);
+
+            if (visible_idx == selected_pos) {
+                epd_draw_rect(4, row_y - 1, EPD_WIDTH - 8, row_h - 1, true);
+            }
+
+            epd_draw_text_limited(8, row_y + 3, 1, true, message_history[idx].from_name, 22);
+            if (is_broadcast_index(idx)) {
+                char broadcast_line[72];
+                snprintf(broadcast_line,
+                         sizeof(broadcast_line),
+                         "BRDCST: %s",
+                         message_history[idx].text);
+                epd_draw_text_limited(8, row_y + 16, 1, false, broadcast_line, 31);
+            } else {
+                epd_draw_text_limited(8, row_y + 16, 1, false, message_history[idx].text, 31);
+            }
+
+            if (i < rows - 1) {
+                epd_draw_hline(6, row_y + row_h - 2, EPD_WIDTH - 12, true);
+            }
+        }
     }
 }
 
@@ -540,31 +832,247 @@ int weact_epd154_show_message_screen(const char *message)
     return epd_refresh_framebuffer();
 }
 
-int weact_epd154_show_received_message(int32_t msg_id, const char *message, const char *from_name)
+int weact_epd154_show_received_message(int32_t msg_id,
+                                       const char *message,
+                                       const char *from_name,
+                                       int32_t from_num,
+                                       int32_t to_num,
+                                       bool show_popup)
 {
-    add_to_history(msg_id, message, from_name);
+    bool is_new_message = add_to_history(msg_id, message, from_name, from_num, to_num);
+
+    if (show_popup && is_new_message && message_count > 0) {
+        draw_ui();
+        draw_message_popup(current_display_index);
+        int ret = epd_refresh_framebuffer();
+        if (ret < 0) {
+            return ret;
+        }
+
+        k_sleep(K_MSEC(POPUP_DURATION_MS));
+    }
+
     draw_ui();
     return epd_refresh_framebuffer();
+}
+
+int weact_epd154_record_received_message(int32_t msg_id,
+                                         const char *message,
+                                         const char *from_name,
+                                         int32_t from_num,
+                                         int32_t to_num)
+{
+    add_to_history(msg_id, message, from_name, from_num, to_num);
+    return 0;
+}
+
+int weact_epd154_show_compose_screen(const char *target_label,
+                                     const char *draft_text,
+                                     bool broadcast_mode)
+{
+    draw_ui();
+
+    epd_draw_filled_rect(10, 42, EPD_WIDTH - 20, EPD_HEIGHT - 56, false);
+    epd_draw_rect(10, 42, EPD_WIDTH - 20, EPD_HEIGHT - 56, true);
+
+    epd_draw_text(16, 48, 1, true, "COMPOSE");
+    epd_draw_hline(12, 60, EPD_WIDTH - 24, true);
+
+    char to_line[72];
+    snprintf(to_line,
+             sizeof(to_line),
+             "TO %s %s",
+             broadcast_mode ? "ALL" : "NODE",
+             target_label != NULL ? target_label : "Unknown");
+    epd_draw_text_limited(16, 66, 1, false, to_line, 34);
+
+    epd_draw_hline(14, 78, EPD_WIDTH - 28, true);
+    epd_draw_text_limited(16, 86, 1, true, draft_text, 84);
+
+    epd_draw_hline(12, EPD_HEIGHT - 32, EPD_WIDTH - 24, true);
+    epd_draw_text(16, EPD_HEIGHT - 28, 1, false, "2/4:Draft 5:Mode 3:Send");
+
+    return epd_refresh_framebuffer();
+}
+
+int weact_epd154_show_thread_screen(const char *target_label,
+                                    const struct weact_epd154_thread_entry *entries,
+                                    size_t entry_count,
+                                    size_t selected_visible_index,
+                                    size_t global_index,
+                                    size_t total)
+{
+    draw_ui();
+
+    epd_draw_filled_rect(8, 30, EPD_WIDTH - 16, EPD_HEIGHT - 50, false);
+    epd_draw_rect(8, 30, EPD_WIDTH - 16, EPD_HEIGHT - 50, true);
+
+    char title[72];
+    snprintf(title,
+             sizeof(title),
+             "DM %s",
+             target_label != NULL ? target_label : "Unknown");
+    epd_draw_text_limited(14, 36, 1, true, title, 26);
+    epd_draw_hline(10, 48, EPD_WIDTH - 20, true);
+
+    const int bubble_top = 54;
+    const int bubble_gap = 3;
+    const int bubble_area_bottom = EPD_HEIGHT - 32;
+    const int bubble_w = EPD_WIDTH - 84;
+
+    int bubble_heights[WEACT_EPD154_THREAD_VISIBLE] = {0};
+    size_t bubble_lines[WEACT_EPD154_THREAD_VISIBLE] = {0};
+
+    if (entries == NULL || entry_count == 0) {
+        epd_draw_text(14, bubble_top + 8, 1, false, "NO DM MESSAGES YET");
+    } else {
+        size_t chars_per_line = (size_t)((bubble_w - 8) / 6);
+        if (chars_per_line == 0) {
+            chars_per_line = 1;
+        }
+
+        for (size_t i = 0; i < entry_count && i < WEACT_EPD154_THREAD_VISIBLE; i++) {
+            size_t lines = 1;
+            size_t col = 0;
+            const char *text = entries[i].text != NULL ? entries[i].text : "";
+
+            for (size_t p = 0; text[p] != '\0'; p++) {
+                if (text[p] == '\n') {
+                    lines++;
+                    col = 0;
+                    continue;
+                }
+
+                col++;
+                if (col > chars_per_line) {
+                    lines++;
+                    col = 1;
+                }
+            }
+
+            bubble_lines[i] = lines;
+            bubble_heights[i] = 20 + (int)(lines * 8);
+        }
+
+        size_t start_visible = 0;
+        while (start_visible < entry_count) {
+            int used_height = 0;
+            for (size_t i = start_visible; i < entry_count; i++) {
+                used_height += bubble_heights[i];
+                if (i + 1 < entry_count) {
+                    used_height += bubble_gap;
+                }
+            }
+
+            if ((bubble_top + used_height) <= bubble_area_bottom) {
+                break;
+            }
+
+            start_visible++;
+        }
+
+        int y = bubble_top;
+        for (size_t i = start_visible; i < entry_count; i++) {
+            bool outgoing = entries[i].is_outgoing;
+            int bubble_h = bubble_heights[i];
+            int x = outgoing ? (EPD_WIDTH - bubble_w - 14) : 14;
+
+            epd_draw_rect(x, y, bubble_w, bubble_h, true);
+
+            size_t selected_draw_index = selected_visible_index;
+            if (selected_draw_index < start_visible) {
+                selected_draw_index = start_visible;
+            }
+
+            if (selected_draw_index == i) {
+                epd_draw_rect(x - 1, y - 1, bubble_w + 2, bubble_h + 2, true);
+            }
+
+            epd_draw_text(x + 4, y + 3, 1, false, outgoing ? "YOU" : "THEM");
+            epd_draw_hline(x + 2, y + 12, bubble_w - 4, true);
+
+            char bubble_text[512];
+            epd_build_wrapped_preview(bubble_text,
+                                      sizeof(bubble_text),
+                                      entries[i].text != NULL ? entries[i].text : "",
+                                      chars_per_line,
+                                      bubble_lines[i]);
+            epd_draw_text(x + 4, y + 15, 1, true, bubble_text);
+
+            y += bubble_h + bubble_gap;
+            if (y >= bubble_area_bottom) {
+                break;
+            }
+        }
+    }
+
+    char pos[24];
+    snprintf(pos, sizeof(pos), "%u/%u", (unsigned int)global_index, (unsigned int)total);
+    epd_draw_text(EPD_WIDTH - 52, 36, 1, false, pos);
+
+    epd_draw_hline(10, EPD_HEIGHT - 30, EPD_WIDTH - 20, true);
+    epd_draw_text(14, EPD_HEIGHT - 26, 1, false, "2/4:Msg 3:Reply 5:Back");
+
+    return epd_refresh_framebuffer();
+}
+
+bool weact_epd154_get_selected_message(int32_t *msg_id, int32_t *from_num, int32_t *to_num)
+{
+    int inbox_indices[MAX_MESSAGES];
+    int inbox_count = build_inbox_indices(inbox_indices);
+    if (inbox_count <= 0) {
+        return false;
+    }
+
+    int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+    int selected_raw = inbox_indices[selected_pos];
+    current_display_index = selected_raw;
+
+    if (msg_id != NULL) {
+        *msg_id = message_history[selected_raw].id;
+    }
+
+    if (from_num != NULL) {
+        *from_num = message_history[selected_raw].from_num;
+    }
+
+    if (to_num != NULL) {
+        *to_num = message_history[selected_raw].to_num;
+    }
+
+    return true;
 }
 
 // Cycle through messages (call this from button press)
 int weact_epd154_next_message(void)
 {
-    if (message_count > 0) {
-        current_display_index = (current_display_index + 1) % message_count;
+    int inbox_indices[MAX_MESSAGES];
+    int inbox_count = build_inbox_indices(inbox_indices);
+
+    if (inbox_count > 0) {
+        int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+        selected_pos = (selected_pos + 1) % inbox_count;
+        current_display_index = inbox_indices[selected_pos];
         draw_ui();
         return epd_refresh_framebuffer();
     }
+
     return 0;
 }
 
 int weact_epd154_previous_message(void)
 {
-    if (message_count > 0) {
-        current_display_index = (current_display_index - 1 + message_count) % message_count;
+    int inbox_indices[MAX_MESSAGES];
+    int inbox_count = build_inbox_indices(inbox_indices);
+
+    if (inbox_count > 0) {
+        int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+        selected_pos = (selected_pos - 1 + inbox_count) % inbox_count;
+        current_display_index = inbox_indices[selected_pos];
         draw_ui();
         return epd_refresh_framebuffer();
     }
+
     return 0;
 }
 
