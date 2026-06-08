@@ -186,15 +186,17 @@ int send_message_to_node(int node_num, const char *text, uint32_t my_node_num, s
         dest = (uint32_t)node_num;
     }
 
-    // History logic treats id=0 as invalid, so start at 1.
-    static uint32_t next_packet_id = 1;
+    // History logic treats id=0 as invalid, so keep a local synthetic id.
+    static uint32_t next_local_history_id = 1;
+    uint32_t local_history_id = next_local_history_id++;
 
     // Build text message packet with provided detials
     meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
     msg.which_payload_variant = meshtastic_ToRadio_packet_tag; 
     msg.packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
-    msg.packet.id = next_packet_id++;
-    msg.packet.from = my_node_num;
+    // Let the radio assign source/id so encryption/routing metadata is consistent.
+    msg.packet.id = 0;
+    msg.packet.from = 0;
     msg.packet.to = dest;
     msg.packet.want_ack = true;
     msg.packet.priority = meshtastic_MeshPacket_Priority_RELIABLE;
@@ -221,14 +223,14 @@ int send_message_to_node(int node_num, const char *text, uint32_t my_node_num, s
         return -EIO;
     }
 
-    printk("TX queued: id=%u to=%u len=%u\n",
-           (unsigned int)msg.packet.id,
+        printk("TX queued: local_id=%u to=%u len=%u\n",
+            (unsigned int)local_history_id,
            (unsigned int)msg.packet.to,
            (unsigned int)stream.bytes_written);
     
     
     
-    add_sent_message_to_history(msg.packet.id, my_node_num, dest, text, text_len, message_history);
+    add_sent_message_to_history(local_history_id, my_node_num, dest, text, text_len, message_history);
 
     // Send frame from buf
     return send_meshtastic_frame(buf, stream.bytes_written);

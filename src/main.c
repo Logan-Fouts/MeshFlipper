@@ -207,6 +207,7 @@ int main(void)
         NULL, NULL, NULL,
         K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
 
+    k_sleep(K_SECONDS(1));
     print_my_node_info(&node_list.my_info);
     int node_num = -160769812;
     int ret = -1;

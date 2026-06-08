@@ -154,6 +154,25 @@ static void epd_set_pixel(int x, int y, bool black)
     }
 }
 
+static void epd_draw_rect(int x, int y, int w, int h, bool black)
+{
+    for (int i = 0; i < w; i++) {
+        epd_set_pixel(x + i, y, black);
+        epd_set_pixel(x + i, y + h - 1, black);
+    }
+    for (int i = 0; i < h; i++) {
+        epd_set_pixel(x, y + i, black);
+        epd_set_pixel(x + w - 1, y + i, black);
+    }
+}
+
+static void epd_draw_hline(int x, int y, int w, bool black)
+{
+    for (int i = 0; i < w; i++) {
+        epd_set_pixel(x + i, y, black);
+    }
+}
+
 static bool epd_get_glyph(char ch, uint8_t glyph[5])
 {
     char c = (char)toupper((unsigned char)ch);
@@ -237,6 +256,39 @@ static void epd_draw_char(int x, int y, char ch, int scale)
     }
 }
 
+static void epd_draw_text(int x, int y, int scale, const char *text)
+{
+    const int char_width = (5 * scale) + scale;
+    int cursor_x = x;
+    int cursor_y = y;
+
+    if (text == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; text[i] != '\0'; i++) {
+        char ch = text[i];
+
+        if (ch == '\n') {
+            cursor_x = x;
+            cursor_y += (7 * scale) + scale;
+            continue;
+        }
+
+        if (cursor_x + char_width > EPD_WIDTH) {
+            cursor_x = x;
+            cursor_y += (7 * scale) + scale;
+        }
+
+        if (cursor_y + (7 * scale) > EPD_HEIGHT) {
+            break;
+        }
+
+        epd_draw_char(cursor_x, cursor_y, ch, scale);
+        cursor_x += char_width;
+    }
+}
+
 static void epd_draw_wrapped_text(int x, int y, int scale, int max_width, const char *text)
 {
     const int char_width = (5 * scale) + scale;
@@ -269,6 +321,14 @@ static void epd_draw_wrapped_text(int x, int y, int scale, int max_width, const 
         epd_draw_char(cursor_x, cursor_y, ch, scale);
         cursor_x += char_width;
     }
+}
+
+static void epd_draw_text_centered(int y, int scale, const char *text)
+{
+    int text_width = strlen(text) * ((5 * scale) + scale);
+    int x = (EPD_WIDTH - text_width) / 2;
+    if (x < 0) x = 0;
+    epd_draw_text(x, y, scale, text);
 }
 
 static int epd_refresh_framebuffer(void)
@@ -515,6 +575,48 @@ int weact_epd154_show_message_screen(const char *message)
     epd_draw_wrapped_text(4, 38, 1, EPD_WIDTH - 8,
                           (message != NULL && message[0] != '\0') ? message : "Waiting for messages...");
 
+    return epd_refresh_framebuffer();
+}
+
+int weact_epd154_show_ui_message(const char *message, const char *sender)
+{
+    if (!device_is_ready(spi_dev)) {
+        return -ENODEV;
+    }
+
+    epd_frame_clear();
+    
+    // Draw header with border
+    epd_draw_rect(0, 0, EPD_WIDTH, 24, true);
+    epd_draw_text_centered(6, 1, "MESHFLIPPER");
+    
+    // Draw separator
+    epd_draw_hline(0, 24, EPD_WIDTH, true);
+    epd_draw_hline(0, 26, EPD_WIDTH, true);
+    
+    // Draw content area border
+    epd_draw_rect(2, 28, EPD_WIDTH - 4, EPD_HEIGHT - 38, true);
+    
+    // Draw sender if provided
+    int y_pos = 36;
+    if (sender != NULL && sender[0] != '\0') {
+        char from_text[64];
+        snprintf(from_text, sizeof(from_text), "FROM: %s", sender);
+        epd_draw_text(6, y_pos, 1, from_text);
+        y_pos += 14;
+        epd_draw_hline(4, y_pos - 2, EPD_WIDTH - 8, true);
+    }
+    
+    // Draw message
+    if (message != NULL && message[0] != '\0') {
+        epd_draw_wrapped_text(6, y_pos, 1, EPD_WIDTH - 12, message);
+    } else {
+        epd_draw_text_centered(EPD_HEIGHT / 2, 1, "No messages");
+    }
+    
+    // Draw footer
+    epd_draw_hline(0, EPD_HEIGHT - 8, EPD_WIDTH, true);
+    
     return epd_refresh_framebuffer();
 }
 
