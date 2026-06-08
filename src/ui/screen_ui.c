@@ -13,8 +13,11 @@ static const char *const quick_replies[] = {
     "Thanks!",
     "Need more info.",
     "Talk soon.",
+    "Hi",
+    "Bye",
 };
 
+//  UI state management
 struct screen_ui_state {
     bool thread_active;
     bool compose_active;
@@ -30,30 +33,38 @@ static struct screen_ui_state g_ui_state;
 static struct message g_thread_snapshot[MAX_MESSAGE_HISTORY];
 static size_t g_thread_snapshot_count;
 
+// Get number of quick replies
 static size_t quick_reply_count(void)
 {
     return sizeof(quick_replies) / sizeof(quick_replies[0]);
 }
 
+// Check if a message is a DM between my node and a peer node
 static bool is_dm_message(const struct message *msg, uint32_t my_node_num, uint32_t peer_node_num)
 {
     uint32_t from = (uint32_t)msg->from;
     uint32_t to = (uint32_t)msg->to;
 
+    // Exclude self-messages (from == to)
+    if (from == to) {
+        return false;
+    }
+
     return (from == my_node_num && to == peer_node_num) ||
            (from == peer_node_num && to == my_node_num);
 }
 
-static void rebuild_thread_snapshot(struct messageHistory *history, uint32_t my_node_num, uint32_t peer_node_num)
+// Rebuild the thread snapshot based on the current message history and the selected peer node for the thread view.
+static void rebuild_thread_snapshot(struct messageHistory *message_history, uint32_t my_node_num, uint32_t peer_node_num)
 {
     g_thread_snapshot_count = 0;
 
-    if (history == NULL || my_node_num == 0 || peer_node_num == 0) {
+    if (message_history == NULL || my_node_num == 0 || peer_node_num == 0) {
         return;
     }
 
-    k_spinlock_key_t key = k_spin_lock(&history->lock);
-    size_t count = history->count;
+    k_spinlock_key_t key = k_spin_lock(&message_history->lock);
+    size_t count = message_history->count;
     size_t start = 0;
 
     if (count > MAX_MESSAGE_HISTORY) {
@@ -61,7 +72,7 @@ static void rebuild_thread_snapshot(struct messageHistory *history, uint32_t my_
     }
 
     for (size_t seq = start; seq < count; seq++) {
-        struct message candidate = history->messages[seq % MAX_MESSAGE_HISTORY];
+        struct message candidate = message_history->messages[seq % MAX_MESSAGE_HISTORY];
 
         if (candidate.id == 0) {
             continue;
@@ -76,7 +87,7 @@ static void rebuild_thread_snapshot(struct messageHistory *history, uint32_t my_
         }
     }
 
-    k_spin_unlock(&history->lock, key);
+    k_spin_unlock(&message_history->lock, key);
 
     if (g_thread_snapshot_count == 0) {
         g_ui_state.thread_message_index = 0;
@@ -88,19 +99,21 @@ static void rebuild_thread_snapshot(struct messageHistory *history, uint32_t my_
     }
 }
 
-static bool copy_latest_received_message(struct messageHistory *history, uint32_t my_node_num, struct message *out)
+// Copy the latest received message that is not from my node and populate the output parameter.
+static bool copy_latest_received_message(struct messageHistory *message_history, uint32_t my_node_num, struct message *out)
 {
-    if (history == NULL || out == NULL) {
+    if (message_history == NULL || out == NULL) {
         return false;
     }
 
-    k_spinlock_key_t key = k_spin_lock(&history->lock);
-    size_t count = history->count;
+    k_spinlock_key_t key = k_spin_lock(&message_history->lock);
+    size_t count = message_history->count;
     size_t visible = count < MAX_MESSAGE_HISTORY ? count : MAX_MESSAGE_HISTORY;
 
+    // Find the latest message that is not from my node and set it to the output parameter.
     for (size_t i = 0; i < visible; i++) {
         size_t index = (count - 1 - i) % MAX_MESSAGE_HISTORY;
-        struct message candidate = history->messages[index];
+        struct message candidate = message_history->messages[index];
 
         if (candidate.id == 0) {
             continue;
@@ -111,14 +124,15 @@ static bool copy_latest_received_message(struct messageHistory *history, uint32_
         }
 
         *out = candidate;
-        k_spin_unlock(&history->lock, key);
+        k_spin_unlock(&message_history->lock, key);
         return true;
     }
 
-    k_spin_unlock(&history->lock, key);
+    k_spin_unlock(&message_history->lock, key);
     return false;
 }
 
+// Resolve a sender's name based on the node history. If the sender is not found, return "Unknown". If the sender has a long name, use that. Otherwise, if they have a short name, use that. If neither is available, return the sender's number as a hex string.
 static const char *resolve_sender_name(const struct nodeHistory *node_history, int32_t sender_num, char *out, size_t out_size)
 {
     if (node_history == NULL || out == NULL || out_size == 0) {
@@ -127,6 +141,7 @@ static const char *resolve_sender_name(const struct nodeHistory *node_history, i
 
     out[0] = '\0';
 
+    // Lock node history lock and find the sender's name based on the sender_num. If not found, return "Unknown".
     k_spinlock_key_t key = k_spin_lock((struct k_spinlock *)&node_history->lock);
     size_t count = node_history->count < MAX_NODE_HISTORY ? node_history->count : MAX_NODE_HISTORY;
 
@@ -148,10 +163,13 @@ static const char *resolve_sender_name(const struct nodeHistory *node_history, i
     }
 
     k_spin_unlock((struct k_spinlock *)&node_history->lock, key);
+
     snprintf(out, out_size, "0x%08X", (uint32_t)sender_num);
+
     return out;
 }
 
+// Show latest message from each node who has messaged user node, sorted by most recent message from that node. This is the "inbox" screen. 
 static int render_thread_screen(struct messageHistory *message_history, struct nodeHistory *node_history)
 {
     if (!g_ui_state.thread_active || node_history == NULL || !node_history->my_info.valid) {
@@ -211,6 +229,7 @@ static int render_thread_screen(struct messageHistory *message_history, struct n
                                            g_thread_snapshot_count);
 }
 
+// Shows compose screen with quick reply options if applicable, otherwise shows empty compose screen. In compose screen, primary button sends the message and secondary button cycles through quick replies. If in broadcast mode, there is no selected target and the message will be sent to all nodes.
 static void render_compose(const struct nodeHistory *node_history)
 {
     char target_label[48];
@@ -230,7 +249,8 @@ static void render_compose(const struct nodeHistory *node_history)
                                      g_ui_state.compose_broadcast);
 }
 
-static bool resolve_thread_target(const struct nodeHistory *node_history, int32_t *out_node_num)
+static bool resolve_thread_target(struct messageHistory *message_history,
+                                  const struct nodeHistory *node_history, int32_t *out_node_num)
 {
     int32_t selected_id = 0;
     int32_t selected_from = 0;
@@ -240,7 +260,7 @@ static bool resolve_thread_target(const struct nodeHistory *node_history, int32_
         return false;
     }
 
-    bool have_selection = weact_epd154_get_selected_message(&selected_id, &selected_from, &selected_to);
+    bool have_selection = weact_epd154_get_selected_message(message_history, node_history, &selected_id, &selected_from, &selected_to);
     ARG_UNUSED(selected_id);
 
     if (!have_selection) {
@@ -289,28 +309,20 @@ int screen_ui_refresh(struct messageHistory *message_history, struct nodeHistory
 
         int ret;
         if (g_ui_state.thread_active) {
-            ret = weact_epd154_record_received_message(latest.id,
-                                                       screen_text,
-                                                       sender_name,
-                                                       latest.from,
-                                                       latest.to);
+            // Just a no-op now - display will read from main's message_history when rendering
+            ret = weact_epd154_record_received_message();
             if ((uint32_t)g_ui_state.thread_node_num == (uint32_t)latest.from) {
                 // Clamp to newest so thread window shows the latest 3 entries.
                 g_ui_state.thread_message_index = (size_t)MAX_MESSAGE_HISTORY;
             }
         } else {
-            ret = weact_epd154_show_received_message(latest.id,
-                                                     screen_text,
-                                                     sender_name,
-                                                     latest.from,
-                                                     latest.to,
-                                                     show_popup);
+            ret = weact_epd154_show_received_message(message_history, node_history, show_popup);
         }
         if (ret < 0) {
             return ret;
         }
     } else if (!g_ui_state.thread_active && !g_ui_state.compose_active) {
-        int ret = weact_epd154_show_message_screen(screen_text);
+        int ret = weact_epd154_show_message_screen(message_history, node_history);
         if (ret < 0) {
             return ret;
         }
@@ -334,28 +346,33 @@ int screen_ui_refresh(struct messageHistory *message_history, struct nodeHistory
     return 0;
 }
 
+// Handle button action based on current UI state and action triggered
 int screen_ui_handle_action(struct messageHistory *message_history,
                             struct nodeHistory *node_history,
                             enum screen_ui_action action)
 {
+    // Handle home action globally to allow quick exit from any screen back to inbox.
     if (action == SCREEN_UI_ACTION_HOME) {
         g_ui_state.compose_active = false;
         g_ui_state.thread_active = false;
         return screen_ui_refresh(message_history, node_history);
     }
 
+    // If not in a dm or compose screen
     if (!g_ui_state.compose_active && !g_ui_state.thread_active) {
         if (action == SCREEN_UI_ACTION_PREVIOUS) {
-            return weact_epd154_previous_message();
+            return weact_epd154_previous_message(message_history, node_history);
         }
 
         if (action == SCREEN_UI_ACTION_NEXT) {
-            return weact_epd154_next_message();
+            return weact_epd154_next_message(message_history, node_history);
         }
 
+        // Enter thread view for the selected message's peer node.
         if (action == SCREEN_UI_ACTION_PRIMARY) {
             int32_t thread_node = 0;
-            if (!resolve_thread_target(node_history, &thread_node)) {
+            // If broadcast or unable to resolve a peer node, do not enter thread view since there is no meaningful thread to show.
+            if (!resolve_thread_target(message_history, node_history, &thread_node)) {
                 return 0;
             }
 
@@ -366,6 +383,7 @@ int screen_ui_handle_action(struct messageHistory *message_history,
                 rebuild_thread_snapshot(message_history,
                                         node_history->my_info.num,
                                         (uint32_t)thread_node);
+                // Clamp to newest so thread window shows the latest 3 entries.
                 if (g_thread_snapshot_count > 0) {
                     g_ui_state.thread_message_index = g_thread_snapshot_count - 1;
                 }
@@ -374,6 +392,7 @@ int screen_ui_handle_action(struct messageHistory *message_history,
             return render_thread_screen(message_history, node_history);
         }
 
+        // Enter compose screen in broadcast mode with no selected target.
         if (action == SCREEN_UI_ACTION_SECONDARY) {
             g_ui_state.compose_active = true;
             g_ui_state.quick_reply_index = 0;
@@ -386,6 +405,7 @@ int screen_ui_handle_action(struct messageHistory *message_history,
         return 0;
     }
 
+    // If in thread view and not in compose, allow navigating messages in the thread, quick replying to the thread peer, or exiting back to inbox. Quick reply will enter compose mode with the target set to the thread peer and the quick reply text filled in. If already in broadcast compose mode, do not allow entering thread view since it would be confusing to show a thread when the message being composed is not part of that thread.
     if (g_ui_state.thread_active && !g_ui_state.compose_active) {
         if (action == SCREEN_UI_ACTION_PREVIOUS || action == SCREEN_UI_ACTION_NEXT) {
             if (node_history == NULL || !node_history->my_info.valid) {
@@ -411,7 +431,9 @@ int screen_ui_handle_action(struct messageHistory *message_history,
 
             return render_thread_screen(message_history, node_history);
         }
+        
 
+        // Enter compose mode with quick reply options for the thread peer.
         if (action == SCREEN_UI_ACTION_PRIMARY) {
             g_ui_state.compose_active = true;
             g_ui_state.quick_reply_index = 0;
@@ -421,6 +443,7 @@ int screen_ui_handle_action(struct messageHistory *message_history,
             return 0;
         }
 
+        // Exit back to inbox and reset thread state.
         if (action == SCREEN_UI_ACTION_SECONDARY) {
             g_ui_state.thread_active = false;
             return screen_ui_refresh(message_history, node_history);

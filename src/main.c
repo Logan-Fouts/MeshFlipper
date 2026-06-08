@@ -157,6 +157,7 @@ void process_messages_task(void)
                 if (msg.which_payload_variant == meshtastic_FromRadio_packet_tag &&
                     msg.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
                     msg.packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
+                    // Skip messages that I sent, since they will already be in the history and we don't want to trigger a UI update that would cause them to jump to the inbox screen.
                     if (node_list.my_info.valid && msg.packet.from == node_list.my_info.num) {
                         continue;
                     }
@@ -232,6 +233,7 @@ static void poll_buttons_and_drive_ui(void)
             printk("UI action failed: %d\n", ui_ret);
         }
 
+        // Check for pending message from the UI and if none then skip send logic.
         struct screen_ui_outgoing outgoing;
         if (!screen_ui_take_outgoing(&outgoing) || !outgoing.valid) {
             continue;
