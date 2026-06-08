@@ -12,6 +12,7 @@
 #include "communication/uart_comms.h"
 #include "communication/ring_buffer.h"
 #include "display/weact_epd154.h"
+#include "ui/screen_ui.h"
 #include "cb_args.h"
 
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
@@ -28,7 +29,18 @@ struct messageHistory message_history = { .count = 0 };
 struct nodeHistory node_list = { .count = 0 };
 struct cb_args user_cb_args = { .message_history = &message_history, .node_list = &node_list };
 
-static void refresh_main_screen(void);
+static bool wait_for_my_node_info(int timeout_ms)
+{
+    int elapsed_ms = 0;
+
+    while (!node_list.my_info.valid && elapsed_ms < timeout_ms) {
+        send_want_config();
+        k_sleep(K_SECONDS(2));
+        elapsed_ms += 2000;
+    }
+
+    return node_list.my_info.valid;
+}
 
 int setup()
 {
@@ -54,6 +66,20 @@ int setup()
         return 0;
     }
 
+
+    int epd_ret = weact_epd154_init();
+    if (epd_ret == 0) {
+        epd_ret = weact_epd154_show_boot_pattern();
+        if (epd_ret < 0) {
+            printk("EPD boot pattern failed: %d\n", epd_ret);
+        }
+    } else {
+        printk("EPD init failed: %d\n", epd_ret);
+    }
+
+    ring_buffer_init(&msg_ring_buffer);
+
+
     return 1;
 }
 
@@ -78,14 +104,16 @@ void process_messages_task(void)
                 if (msg.which_payload_variant == meshtastic_FromRadio_my_info_tag ||
                     msg.which_payload_variant == meshtastic_FromRadio_node_info_tag) {
                     update_node_history(&node_list, &msg);
-                    refresh_main_screen();
                 }
 
                 if (msg.which_payload_variant == meshtastic_FromRadio_packet_tag &&
                     msg.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
                     msg.packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
                     update_message_history(&message_history, &msg);
-                    refresh_main_screen();
+                    int ret = screen_ui_refresh(&message_history, &node_list);
+                    if (ret < 0) {
+                        printk("EPD screen update failed: %d\n", ret);
+                    }
                 }
             }
         }
@@ -132,115 +160,19 @@ void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
     }
 }
 
-static bool copy_latest_received_message(struct messageHistory *history, uint32_t my_node_num, struct message *out)
-{
-    if (history == NULL || out == NULL) {
-        return false;
-    }
-
-    k_spinlock_key_t key = k_spin_lock(&history->lock);
-    size_t count = history->count;
-    size_t visible = count < MAX_MESSAGE_HISTORY ? count : MAX_MESSAGE_HISTORY;
-
-    for (size_t i = 0; i < visible; i++) {
-        size_t index = (count - 1 - i) % MAX_MESSAGE_HISTORY;
-        struct message candidate = history->messages[index];
-
-        if (candidate.id == 0) {
-            continue;
-        }
-
-        if (candidate.from == (int)my_node_num) {
-            continue;
-        }
-
-        *out = candidate;
-        k_spin_unlock(&history->lock, key);
-        return true;
-    }
-
-    k_spin_unlock(&history->lock, key);
-    return false;
-}
-
-static const char *resolve_sender_name(int32_t sender_num, char *out, size_t out_size)
-{
-    if (out == NULL || out_size == 0) {
-        return "Unknown";
-    }
-
-    out[0] = '\0';
-
-    k_spinlock_key_t key = k_spin_lock(&node_list.lock);
-    size_t count = node_list.count < MAX_NODE_HISTORY ? node_list.count : MAX_NODE_HISTORY;
-
-    for (size_t i = 0; i < count; i++) {
-        if (!node_list.nodes[i].valid || node_list.nodes[i].num != (uint32_t)sender_num) {
-            continue;
-        }
-
-        if (node_list.nodes[i].long_name[0] != '\0') {
-            strncpy(out, node_list.nodes[i].long_name, out_size - 1);
-        } else if (node_list.nodes[i].short_name[0] != '\0') {
-            strncpy(out, node_list.nodes[i].short_name, out_size - 1);
-        } else {
-            strncpy(out, "Unknown", out_size - 1);
-        }
-        out[out_size - 1] = '\0';
-        k_spin_unlock(&node_list.lock, key);
-        return out;
-    }
-
-    k_spin_unlock(&node_list.lock, key);
-    snprintf(out, out_size, "0x%04X", (uint32_t)sender_num & 0xFFFFU);
-    return out;
-}
-
-static void refresh_main_screen(void)
-{
-    struct message latest;
-    const char *screen_text = "Waiting for messages...";
-    const char *sender_name = "Unknown";
-    char sender_name_buf[40];
-
-    if (node_list.my_info.valid && copy_latest_received_message(&message_history, node_list.my_info.num, &latest)) {
-        screen_text = latest.text;
-        sender_name = resolve_sender_name(latest.from, sender_name_buf, sizeof(sender_name_buf));
-        int ret = weact_epd154_show_received_message(latest.id, screen_text, sender_name);
-        if (ret < 0) {
-            printk("EPD screen update failed: %d\n", ret);
-        }
-        return;
-    }
-
-    int ret = weact_epd154_show_message_screen(screen_text);
-    if (ret < 0) {
-        printk("EPD screen update failed: %d\n", ret);
-    }
-}
-
 int main(void)
 {
     printk("Starting MeshFlipper...\n");
-
-    int epd_ret = weact_epd154_init();
-    if (epd_ret == 0) {
-        epd_ret = weact_epd154_show_boot_pattern();
-        if (epd_ret < 0) {
-            printk("EPD boot pattern failed: %d\n", epd_ret);
-        }
-    } else {
-        printk("EPD init failed: %d\n", epd_ret);
-    }
-
-    ring_buffer_init(&msg_ring_buffer);
 
     if (setup() == 0) {
         printk("Setup failed. Exiting.\n");
         return -1;
     }
 
-    refresh_main_screen();
+    int ui_ret = screen_ui_refresh(&message_history, &node_list);
+    if (ui_ret < 0) {
+        printk("EPD screen update failed: %d\n", ui_ret);
+    }
 
     // Create message processing thread
     k_thread_create(&msg_task_thread, msg_task_stack,
@@ -249,20 +181,23 @@ int main(void)
         NULL, NULL, NULL,
         K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
 
-    k_sleep(K_SECONDS(1));
+    if (!wait_for_my_node_info(30000)) {
+        printk("MyNodeInfo not received yet; skipping startup test send.\n");
+    }
+
     print_my_node_info(&node_list.my_info);
-    int node_num = -160769812;
-    int ret = -1;
-    while (ret < 0) {
-        ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num, &message_history);
-        k_sleep(K_SECONDS(2));
+
+    if (node_list.my_info.valid) {
+        int node_num = -160769812;
+        int ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num, &message_history);
+        if (ret < 0) {
+            printk("Startup test send failed: %d\n", ret);
+        }
     }
     
     // Periodically send want_config_id
     const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // 2 minutes
     int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
-
-    refresh_main_screen();
 
     run_loop(next_want_config_ms, want_config_interval_ms);
 
