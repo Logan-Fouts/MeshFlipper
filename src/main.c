@@ -11,6 +11,7 @@
 #include "communication/manage_pb.h"
 #include "communication/uart_comms.h"
 #include "communication/ring_buffer.h"
+#include "display/weact_epd154.h"
 #include "cb_args.h"
 
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
@@ -26,6 +27,8 @@ static struct k_thread msg_task_thread;
 struct messageHistory message_history = { .count = 0 };
 struct nodeHistory node_list = { .count = 0 };
 struct cb_args user_cb_args = { .message_history = &message_history, .node_list = &node_list };
+
+static void refresh_main_screen(void);
 
 int setup()
 {
@@ -123,12 +126,70 @@ void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
         } else {
             printk("\n  No messages received yet.\n");
         }
+
+        refresh_main_screen();
+    }
+}
+
+static bool copy_latest_received_message(struct messageHistory *history, uint32_t my_node_num, struct message *out)
+{
+    if (history == NULL || out == NULL) {
+        return false;
+    }
+
+    k_spinlock_key_t key = k_spin_lock(&history->lock);
+    size_t count = history->count;
+    size_t visible = count < MAX_MESSAGE_HISTORY ? count : MAX_MESSAGE_HISTORY;
+
+    for (size_t i = 0; i < visible; i++) {
+        size_t index = (count - 1 - i) % MAX_MESSAGE_HISTORY;
+        struct message candidate = history->messages[index];
+
+        if (candidate.id == 0) {
+            continue;
+        }
+
+        if (candidate.from == (int)my_node_num) {
+            continue;
+        }
+
+        *out = candidate;
+        k_spin_unlock(&history->lock, key);
+        return true;
+    }
+
+    k_spin_unlock(&history->lock, key);
+    return false;
+}
+
+static void refresh_main_screen(void)
+{
+    struct message latest;
+    const char *screen_text = "Waiting for messages...";
+
+    if (node_list.my_info.valid && copy_latest_received_message(&message_history, node_list.my_info.num, &latest)) {
+        screen_text = latest.text;
+    }
+
+    int ret = weact_epd154_show_message_screen(screen_text);
+    if (ret < 0) {
+        printk("EPD screen update failed: %d\n", ret);
     }
 }
 
 int main(void)
 {
     printk("Starting MeshFlipper...\n");
+
+    int epd_ret = weact_epd154_init();
+    if (epd_ret == 0) {
+        epd_ret = weact_epd154_show_boot_pattern();
+        if (epd_ret < 0) {
+            printk("EPD boot pattern failed: %d\n", epd_ret);
+        }
+    } else {
+        printk("EPD init failed: %d\n", epd_ret);
+    }
 
     ring_buffer_init(&msg_ring_buffer);
 
@@ -137,6 +198,8 @@ int main(void)
         return -1;
     }
 
+    refresh_main_screen();
+
     // Create message processing thread
     k_thread_create(&msg_task_thread, msg_task_stack,
         K_THREAD_STACK_SIZEOF(msg_task_stack),
@@ -144,27 +207,19 @@ int main(void)
         NULL, NULL, NULL,
         K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
 
-    // Wait for MyNodeInfo to arrive
-    for (int i = 0; i < 20 && !node_list.my_info.valid; i++) {
-        k_sleep(K_MSEC(250));
-    }
-
     print_my_node_info(&node_list.my_info);
-    k_sleep(K_SECONDS(5));
-    print_node_history_brief(&node_list);
-
+    int node_num = -160769812;
+    int ret = -1;
+    while (ret < 0) {
+        ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num, &message_history);
+        k_sleep(K_SECONDS(1));
+    }
+    
     // Periodically send want_config_id
     const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // 2 minutes
     int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
 
-    // Test sending a message
-    k_sleep(K_SECONDS(3));
-    int node_num = -160769812;
-    int ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num, &message_history);
-    
-    if (ret < 0) {
-        printk("Failed to send test message: %d\n", ret);
-    }
+    refresh_main_screen();
 
     run_loop(next_want_config_ms, want_config_interval_ms);
 

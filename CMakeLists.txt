@@ -40,6 +40,7 @@ target_sources(
     src/communication/manage_pb.c
     src/communication/uart_comms.c
     src/communication/ring_buffer.c
+    src/display/weact_epd154.c
 )
 
 target_include_directories(

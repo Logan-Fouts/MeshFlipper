@@ -9,6 +9,12 @@
 			input-enable;
 		};
 	};
+
+	spi0_default: spi0_default {
+		group1 {
+			pinmux = <SPI0_SCK_P18 SPI0_TX_P19>;
+		};
+	};
 };
 
 &uart0 {
@@ -16,4 +22,10 @@
     current-speed = <115200>;
     pinctrl-0 = <&uart0_default>;
     pinctrl-names = "default";
+};
+
+&spi0 {
+	status = "okay";
+	pinctrl-0 = <&spi0_default>;
+	pinctrl-names = "default";
 };
