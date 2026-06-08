@@ -78,12 +78,14 @@ void process_messages_task(void)
                 if (msg.which_payload_variant == meshtastic_FromRadio_my_info_tag ||
                     msg.which_payload_variant == meshtastic_FromRadio_node_info_tag) {
                     update_node_history(&node_list, &msg);
+                    refresh_main_screen();
                 }
 
                 if (msg.which_payload_variant == meshtastic_FromRadio_packet_tag &&
                     msg.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
                     msg.packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
                     update_message_history(&message_history, &msg);
+                    refresh_main_screen();
                 }
             }
         }
@@ -127,7 +129,6 @@ void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
             printk("\n  No messages received yet.\n");
         }
 
-        refresh_main_screen();
     }
 }
 
@@ -162,13 +163,54 @@ static bool copy_latest_received_message(struct messageHistory *history, uint32_
     return false;
 }
 
+static const char *resolve_sender_name(int32_t sender_num, char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return "Unknown";
+    }
+
+    out[0] = '\0';
+
+    k_spinlock_key_t key = k_spin_lock(&node_list.lock);
+    size_t count = node_list.count < MAX_NODE_HISTORY ? node_list.count : MAX_NODE_HISTORY;
+
+    for (size_t i = 0; i < count; i++) {
+        if (!node_list.nodes[i].valid || node_list.nodes[i].num != (uint32_t)sender_num) {
+            continue;
+        }
+
+        if (node_list.nodes[i].long_name[0] != '\0') {
+            strncpy(out, node_list.nodes[i].long_name, out_size - 1);
+        } else if (node_list.nodes[i].short_name[0] != '\0') {
+            strncpy(out, node_list.nodes[i].short_name, out_size - 1);
+        } else {
+            strncpy(out, "Unknown", out_size - 1);
+        }
+        out[out_size - 1] = '\0';
+        k_spin_unlock(&node_list.lock, key);
+        return out;
+    }
+
+    k_spin_unlock(&node_list.lock, key);
+    snprintf(out, out_size, "0x%04X", (uint32_t)sender_num & 0xFFFFU);
+    return out;
+}
+
 static void refresh_main_screen(void)
 {
     struct message latest;
     const char *screen_text = "Waiting for messages...";
+    const char *sender_name = "Unknown";
+    char sender_name_buf[40];
 
     if (node_list.my_info.valid && copy_latest_received_message(&message_history, node_list.my_info.num, &latest)) {
         screen_text = latest.text;
+        sender_name = resolve_sender_name(latest.from, sender_name_buf, sizeof(sender_name_buf));
+        int ret = weact_epd154_show_received_message(latest.id, screen_text, sender_name);
+        if (ret < 0) {
+            printk("EPD screen update failed: %d\n", ret);
+        }
+        return;
     }
 
     int ret = weact_epd154_show_message_screen(screen_text);
@@ -213,7 +255,7 @@ int main(void)
     int ret = -1;
     while (ret < 0) {
         ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num, &message_history);
-        k_sleep(K_SECONDS(1));
+        k_sleep(K_SECONDS(2));
     }
     
     // Periodically send want_config_id
