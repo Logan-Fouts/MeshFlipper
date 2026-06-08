@@ -160,7 +160,7 @@ int main(void)
     // Test sending a message
     k_sleep(K_SECONDS(3));
     int node_num = -160769812;
-    int ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num);
+    int ret = send_message_to_node(node_num, "Pico->Heltec->Mesh Ping Pong", node_list.my_info.num, &message_history);
     
     if (ret < 0) {
         printk("Failed to send test message: %d\n", ret);

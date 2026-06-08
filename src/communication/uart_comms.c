@@ -149,7 +149,22 @@ int send_want_config(void)
     return send_meshtastic_frame(buf, stream.bytes_written);
 }
 
-int send_message_to_node(int node_num, const char *text, uint32_t my_node_num)
+void add_sent_message_to_history(uint32_t id, uint32_t from, uint32_t to, const char *text, size_t text_len, struct messageHistory *message_history)
+{
+    meshtastic_FromRadio from_msg = meshtastic_FromRadio_init_zero;
+    from_msg.which_payload_variant = meshtastic_FromRadio_packet_tag;
+    from_msg.packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+    from_msg.packet.id = id;
+    from_msg.packet.from = from;
+    from_msg.packet.to = to;
+    from_msg.packet.decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+    memcpy(from_msg.packet.decoded.payload.bytes, text, text_len);
+    from_msg.packet.decoded.payload.size = text_len;
+    
+    update_message_history(message_history, &from_msg);
+}
+
+int send_message_to_node(int node_num, const char *text, uint32_t my_node_num, struct messageHistory *message_history)
 {
     if (text == NULL)
         return -EINVAL;
@@ -171,14 +186,15 @@ int send_message_to_node(int node_num, const char *text, uint32_t my_node_num)
         dest = (uint32_t)node_num;
     }
 
-    static uint32_t next_packet_id = 0;
+    // History logic treats id=0 as invalid, so start at 1.
+    static uint32_t next_packet_id = 1;
 
     // Build text message packet with provided detials
     meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
     msg.which_payload_variant = meshtastic_ToRadio_packet_tag; 
     msg.packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
     msg.packet.id = next_packet_id++;
-    msg.packet.from = 0;
+    msg.packet.from = my_node_num;
     msg.packet.to = dest;
     msg.packet.want_ack = true;
     msg.packet.priority = meshtastic_MeshPacket_Priority_RELIABLE;
@@ -209,6 +225,10 @@ int send_message_to_node(int node_num, const char *text, uint32_t my_node_num)
            (unsigned int)msg.packet.id,
            (unsigned int)msg.packet.to,
            (unsigned int)stream.bytes_written);
+    
+    
+    
+    add_sent_message_to_history(msg.packet.id, my_node_num, dest, text, text_len, message_history);
 
     // Send frame from buf
     return send_meshtastic_frame(buf, stream.bytes_written);
