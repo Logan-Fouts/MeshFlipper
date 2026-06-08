@@ -5,7 +5,7 @@
 #include <zephyr/spinlock.h>
 #include "meshtastic/mesh.pb.h"
 
-#define MAX_MESSAGE_HISTORY 200
+#define MAX_MESSAGE_HISTORY 300
 
 struct message {
     int id;

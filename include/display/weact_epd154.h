@@ -15,6 +15,11 @@ struct weact_epd154_thread_entry {
     bool is_outgoing;
 };
 
+struct weact_epd154_node_entry {
+    uint32_t node_num;
+    const char *label;
+};
+
 int weact_epd154_init(void);
 int weact_epd154_show_boot_pattern(void);
 int weact_epd154_show_message_screen(struct messageHistory *message_history,
@@ -32,9 +37,14 @@ int weact_epd154_show_thread_screen(const char *target_label,
                                     size_t selected_visible_index,
                                     size_t global_index,
                                     size_t total);
+int weact_epd154_show_node_picker_screen(const struct weact_epd154_node_entry *entries,
+                                         size_t entry_count,
+                                         size_t selected_index);
 bool weact_epd154_get_selected_message(struct messageHistory *message_history,
                                        const struct nodeHistory *node_history,
                                        int32_t *msg_id, int32_t *from_num, int32_t *to_num);
+bool weact_epd154_is_broadcast_compose_selected(struct messageHistory *message_history,
+                                                const struct nodeHistory *node_history);
 int weact_epd154_next_message(struct messageHistory *message_history,
                               const struct nodeHistory *node_history);
 int weact_epd154_previous_message(struct messageHistory *message_history,

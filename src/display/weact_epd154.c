@@ -14,9 +14,11 @@
 #define EPD_WIDTH 200
 #define EPD_HEIGHT 200
 #define EPD_BUF_SIZE ((EPD_WIDTH * EPD_HEIGHT) / 8)
-#define MAX_MESSAGES 5
+#define MAX_MESSAGES 6
 #define INBOX_VISIBLE_ROWS 4
+#define NODE_PICKER_VISIBLE_ROWS 4
 #define POPUP_DURATION_MS 1800
+#define INBOX_BROADCAST_COMPOSE_INDEX (-1)
 
 // Selection state: which message is currently highlighted in inbox
 static int current_display_index = 0;
@@ -508,44 +510,92 @@ static bool is_broadcast_message(struct messageHistory *hist, int idx)
     return (uint32_t)hist->messages[idx].to == 0xFFFFFFFFu;
 }
 
+static int latest_broadcast_index(struct messageHistory *hist)
+{
+    if (hist == NULL) {
+        return -1;
+    }
+
+    for (int i = (int)hist->count - 1; i >= 0; i--) {
+        if (is_broadcast_message(hist, i)) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static bool get_thread_peer_for_message(const struct messageHistory *hist,
+                                        int idx,
+                                        uint32_t my_node_num,
+                                        int32_t *out_peer,
+                                        bool *out_outgoing)
+{
+    if (hist == NULL || idx < 0 || idx >= (int)hist->count || out_peer == NULL || out_outgoing == NULL) {
+        return false;
+    }
+
+    const struct message *msg = &hist->messages[idx];
+    uint32_t from = (uint32_t)msg->from;
+    uint32_t to = (uint32_t)msg->to;
+
+    if (from == to) {
+        return false;
+    }
+
+    if (my_node_num != 0) {
+        if (from == my_node_num) {
+            if (to == 0 || to == 0xFFFFFFFFu || to == my_node_num) {
+                return false;
+            }
+            *out_peer = (int32_t)to;
+            *out_outgoing = true;
+            return true;
+        }
+
+        if (to == my_node_num) {
+            if (from == 0 || from == 0xFFFFFFFFu || from == my_node_num) {
+                return false;
+            }
+            *out_peer = (int32_t)from;
+            *out_outgoing = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    if (from == 0 || from == 0xFFFFFFFFu) {
+        return false;
+    }
+
+    *out_peer = (int32_t)from;
+    *out_outgoing = false;
+    return true;
+}
+
 static int build_inbox_indices(struct messageHistory *hist, const struct nodeHistory *node_hist, int out_indices[MAX_MESSAGES])
 {
-    if (hist == NULL || hist->count == 0 || node_hist == NULL) {
+    if (node_hist == NULL) {
         return 0;
     }
 
     uint32_t my_node_num = node_hist->my_info.num;
-
-    int latest_broadcast = -1;
-    for (int i = 0; i < (int)hist->count; i++) {
-        if (is_broadcast_message(hist, i)) {
-            latest_broadcast = i;
-        }
-    }
 
     int per_node_latest[MAX_MESSAGES];
     int per_node_count = 0;
     int32_t seen_nodes[MAX_MESSAGES];
     int seen_count = 0;
 
-    for (int i = (int)hist->count - 1; i >= 0 && per_node_count < MAX_MESSAGES; i--) {
+    for (int i = (hist != NULL ? (int)hist->count - 1 : -1); i >= 0 && per_node_count < MAX_MESSAGES; i--) {
         if (is_broadcast_message(hist, i)) {
             continue;
         }
 
-        // Exclude self-messages (from == to)
-        if (hist->messages[i].from == hist->messages[i].to) {
+        int32_t node_id = 0;
+        bool outgoing = false;
+        if (!get_thread_peer_for_message(hist, i, my_node_num, &node_id, &outgoing)) {
             continue;
-        }
-
-        // Exclude messages sent by the device itself
-        if ((uint32_t)hist->messages[i].from == my_node_num) {
-            continue;
-        }
-
-        int32_t node_id = hist->messages[i].from;
-        if (node_id == 0) {
-            node_id = hist->messages[i].to;
         }
 
         bool already_seen = false;
@@ -565,42 +615,25 @@ static int build_inbox_indices(struct messageHistory *hist, const struct nodeHis
     }
 
     int count = 0;
-    for (int i = per_node_count - 1; i >= 0 && count < MAX_MESSAGES; i--) {
-        out_indices[count++] = per_node_latest[i];
+    int real_indices[MAX_MESSAGES];
+    int real_count = 0;
+    for (int i = per_node_count - 1; i >= 0 && real_count < MAX_MESSAGES; i--) {
+        real_indices[real_count++] = per_node_latest[i];
     }
 
-    if (latest_broadcast >= 0) {
-        bool already_included = false;
-        for (int i = 0; i < count; i++) {
-            if (out_indices[i] == latest_broadcast) {
-                already_included = true;
-                break;
-            }
-        }
-
-        if (!already_included) {
-            if (count < MAX_MESSAGES) {
-                out_indices[count++] = latest_broadcast;
-            } else {
-                int oldest_pos = 0;
-                for (int i = 1; i < count; i++) {
-                    if (out_indices[i] < out_indices[oldest_pos]) {
-                        oldest_pos = i;
-                    }
-                }
-                out_indices[oldest_pos] = latest_broadcast;
+    for (int i = 0; i < real_count - 1; i++) {
+        for (int j = i + 1; j < real_count; j++) {
+            if (real_indices[j] > real_indices[i]) {
+                int tmp = real_indices[i];
+                real_indices[i] = real_indices[j];
+                real_indices[j] = tmp;
             }
         }
     }
 
-    for (int i = 0; i < count - 1; i++) {
-        for (int j = i + 1; j < count; j++) {
-            if (out_indices[j] < out_indices[i]) {
-                int tmp = out_indices[i];
-                out_indices[i] = out_indices[j];
-                out_indices[j] = tmp;
-            }
-        }
+    out_indices[count++] = INBOX_BROADCAST_COMPOSE_INDEX;
+    for (int i = 0; i < real_count && count < MAX_MESSAGES; i++) {
+        out_indices[count++] = real_indices[i];
     }
 
     return count;
@@ -614,7 +647,7 @@ static int inbox_selected_position(const int *inbox_indices, int inbox_count)
         }
     }
 
-    return inbox_count > 0 ? inbox_count - 1 : 0;
+    return 0;
 }
 
 static int inbox_start_index(int selected_pos, int inbox_count)
@@ -685,8 +718,9 @@ static void draw_ui(struct messageHistory *hist, const struct nodeHistory *node_
     
     // ===== BOTTOM BAR =====
     epd_draw_hline(0, EPD_HEIGHT - 14, EPD_WIDTH, true);
+    int thread_count = inbox_count;
     char status[32];
-    snprintf(status, sizeof(status), "INBOX: %d", inbox_count);
+    snprintf(status, sizeof(status), "INBOX: %d", thread_count);
     epd_draw_text(4, EPD_HEIGHT - 11, 1, false, status);
     
     // Navigation arrows if multiple messages
@@ -700,13 +734,10 @@ static void draw_ui(struct messageHistory *hist, const struct nodeHistory *node_
     }
     
     // ===== CONTENT AREA =====
-    epd_draw_rect(2, 26, EPD_WIDTH - 4, EPD_HEIGHT - 44, true);
+    epd_draw_rect(2, 26, EPD_WIDTH - 4, EPD_HEIGHT - 40, true);
     
     if (inbox_count == 0) {
-        // No messages - show idle screen
         epd_draw_text_centered(EPD_HEIGHT / 2 - 20, 2, true, "NO MESSAGES");
-        epd_draw_text_centered(EPD_HEIGHT / 2, 1, false, "GPIO3 Reply  GPIO5 Bcast");
-        epd_draw_text_centered(EPD_HEIGHT / 2 + 20, 1, false, "GPIO2/4 Select");
     } else {
         const int row_h = 36;
         int start = inbox_start_index(selected_pos, inbox_count);
@@ -724,9 +755,40 @@ static void draw_ui(struct messageHistory *hist, const struct nodeHistory *node_
                 epd_draw_rect(4, row_y - 1, EPD_WIDTH - 8, row_h - 1, true);
             }
 
+            if (idx == INBOX_BROADCAST_COMPOSE_INDEX) {
+                epd_draw_text_limited(8, row_y + 3, 1, true, "BROADCAST", 22);
+                int brdcst_idx = latest_broadcast_index(hist);
+                if (brdcst_idx >= 0) {
+                    const char *broadcast_text = "";
+                    history_get_message_at(hist, brdcst_idx, NULL, NULL, NULL, &broadcast_text);
+
+                    char broadcast_line[72];
+                    snprintf(broadcast_line,
+                             sizeof(broadcast_line),
+                             "BRDCST: %s",
+                             broadcast_text != NULL ? broadcast_text : "");
+                    epd_draw_text_limited(8, row_y + 16, 1, false, broadcast_line, 31);
+                } else {
+                    epd_draw_text_limited(8, row_y + 16, 1, false, "SEND TO ALL NODES", 31);
+                }
+
+                if (i < rows - 1) {
+                    epd_draw_hline(6, row_y + row_h - 2, EPD_WIDTH - 12, true);
+                }
+                continue;
+            }
+
             int32_t from_num = 0;
+            int32_t to_num = 0;
             const char *msg_text = "";
-            history_get_message_at(hist, idx, NULL, &from_num, NULL, &msg_text);
+            history_get_message_at(hist, idx, NULL, &from_num, &to_num, &msg_text);
+
+            bool row_outgoing = false;
+            int32_t peer_node = from_num;
+            uint32_t my_node_num = (node_hist != NULL && node_hist->my_info.valid) ? node_hist->my_info.num : 0;
+            if (get_thread_peer_for_message(hist, idx, my_node_num, &peer_node, &row_outgoing)) {
+                from_num = peer_node;
+            }
 
             const char *from_name = get_node_name(node_hist, from_num);
 
@@ -738,6 +800,13 @@ static void draw_ui(struct messageHistory *hist, const struct nodeHistory *node_
                          "BRDCST: %s",
                          msg_text);
                 epd_draw_text_limited(8, row_y + 16, 1, false, broadcast_line, 31);
+            } else if (row_outgoing) {
+                char outgoing_line[72];
+                snprintf(outgoing_line,
+                         sizeof(outgoing_line),
+                         "YOU: %s",
+                         msg_text);
+                epd_draw_text_limited(8, row_y + 16, 1, false, outgoing_line, 31);
             } else {
                 epd_draw_text_limited(8, row_y + 16, 1, false, msg_text, 31);
             }
@@ -1027,6 +1096,83 @@ int weact_epd154_show_thread_screen(const char *target_label,
     return epd_refresh_framebuffer();
 }
 
+int weact_epd154_show_node_picker_screen(const struct weact_epd154_node_entry *entries,
+                                         size_t entry_count,
+                                         size_t selected_index)
+{
+    epd_frame_clear();
+
+    epd_draw_text_centered(5, 1, false, "SELECT NODE");
+    epd_draw_hline(0, 23, EPD_WIDTH, true);
+
+    epd_draw_rect(2, 26, EPD_WIDTH - 4, EPD_HEIGHT - 44, true);
+
+    epd_draw_hline(0, EPD_HEIGHT - 14, EPD_WIDTH, true);
+    epd_draw_text(4, EPD_HEIGHT - 11, 1, false, "2/4 Nav 3 Pick 5 Back");
+
+    if (entries == NULL || entry_count == 0) {
+        epd_draw_text_centered(EPD_HEIGHT / 2 - 14, 2, true, "NO NODES");
+        epd_draw_text_centered(EPD_HEIGHT / 2 + 8, 1, false, "WAITING FOR NODE INFO");
+        return epd_refresh_framebuffer();
+    }
+
+    if (selected_index >= entry_count) {
+        selected_index = entry_count - 1;
+    }
+
+    size_t start = 0;
+    if (entry_count > NODE_PICKER_VISIBLE_ROWS) {
+        if (selected_index >= (NODE_PICKER_VISIBLE_ROWS - 1)) {
+            start = selected_index - (NODE_PICKER_VISIBLE_ROWS - 1);
+        }
+
+        size_t max_start = entry_count - NODE_PICKER_VISIBLE_ROWS;
+        if (start > max_start) {
+            start = max_start;
+        }
+    }
+
+    size_t rows = entry_count - start;
+    if (rows > NODE_PICKER_VISIBLE_ROWS) {
+        rows = NODE_PICKER_VISIBLE_ROWS;
+    }
+
+    const int row_h = 36;
+    for (size_t i = 0; i < rows; i++) {
+        size_t idx = start + i;
+        int row_y = 28 + (int)(i * row_h);
+
+        if (idx == selected_index) {
+            epd_draw_rect(4, row_y - 1, EPD_WIDTH - 8, row_h - 1, true);
+        }
+
+        char node_id[20];
+        snprintf(node_id, sizeof(node_id), "0x%08X", (unsigned int)entries[idx].node_num);
+
+        epd_draw_text_limited(8,
+                              row_y + 3,
+                              1,
+                              true,
+                              entries[idx].label != NULL ? entries[idx].label : "Unknown",
+                              24);
+        epd_draw_text_limited(8, row_y + 16, 1, false, node_id, 16);
+
+        if (i < rows - 1) {
+            epd_draw_hline(6, row_y + row_h - 2, EPD_WIDTH - 12, true);
+        }
+    }
+
+    char idx_text[24];
+    snprintf(idx_text,
+             sizeof(idx_text),
+             "%u/%u",
+             (unsigned int)(selected_index + 1),
+             (unsigned int)entry_count);
+    epd_draw_text(EPD_WIDTH - 46, EPD_HEIGHT - 11, 1, false, idx_text);
+
+    return epd_refresh_framebuffer();
+}
+
 bool weact_epd154_get_selected_message(struct messageHistory *message_history,
                                        const struct nodeHistory *node_history,
                                        int32_t *msg_id, int32_t *from_num, int32_t *to_num)
@@ -1041,9 +1187,29 @@ bool weact_epd154_get_selected_message(struct messageHistory *message_history,
     int selected_raw = inbox_indices[selected_pos];
     current_display_index = selected_raw;
 
+    if (selected_raw == INBOX_BROADCAST_COMPOSE_INDEX) {
+        return false;
+    }
+
     (void)node_history;  // Unused but passed for consistency
 
     return history_get_message_at(message_history, selected_raw, msg_id, from_num, to_num, NULL);
+}
+
+bool weact_epd154_is_broadcast_compose_selected(struct messageHistory *message_history,
+                                                const struct nodeHistory *node_history)
+{
+    int inbox_indices[MAX_MESSAGES];
+    int inbox_count = build_inbox_indices(message_history, node_history, inbox_indices);
+    if (inbox_count <= 0) {
+        return false;
+    }
+
+    int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+    int selected_raw = inbox_indices[selected_pos];
+    current_display_index = selected_raw;
+
+    return selected_raw == INBOX_BROADCAST_COMPOSE_INDEX;
 }
 
 // Cycle through messages (call this from button press)

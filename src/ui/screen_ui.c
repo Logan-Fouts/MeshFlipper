@@ -20,10 +20,14 @@ static const char *const quick_replies[] = {
 //  UI state management
 struct screen_ui_state {
     bool thread_active;
+    bool thread_broadcast;
+    bool node_picker_active;
     bool compose_active;
     bool compose_broadcast;
     uint8_t quick_reply_index;
     size_t thread_message_index;
+    size_t node_picker_index;
+    int32_t last_handled_incoming_id;
     int32_t thread_node_num;
     int32_t selected_target_node;
     struct screen_ui_outgoing pending;
@@ -32,6 +36,10 @@ struct screen_ui_state {
 static struct screen_ui_state g_ui_state;
 static struct message g_thread_snapshot[MAX_MESSAGE_HISTORY];
 static size_t g_thread_snapshot_count;
+static struct weact_epd154_node_entry g_node_snapshot[MAX_NODE_HISTORY];
+static char g_node_snapshot_labels[MAX_NODE_HISTORY][40];
+static uint32_t g_node_snapshot_last_heard[MAX_NODE_HISTORY];
+static size_t g_node_snapshot_count;
 
 // Get number of quick replies
 static size_t quick_reply_count(void)
@@ -52,6 +60,15 @@ static bool is_dm_message(const struct message *msg, uint32_t my_node_num, uint3
 
     return (from == my_node_num && to == peer_node_num) ||
            (from == peer_node_num && to == my_node_num);
+}
+
+static bool is_broadcast_thread_message(const struct message *msg)
+{
+    if (msg == NULL || msg->id == 0) {
+        return false;
+    }
+
+    return (uint32_t)msg->to == 0xFFFFFFFFu;
 }
 
 // Rebuild the thread snapshot based on the current message history and the selected peer node for the thread view.
@@ -79,6 +96,46 @@ static void rebuild_thread_snapshot(struct messageHistory *message_history, uint
         }
 
         if (!is_dm_message(&candidate, my_node_num, peer_node_num)) {
+            continue;
+        }
+
+        if (g_thread_snapshot_count < MAX_MESSAGE_HISTORY) {
+            g_thread_snapshot[g_thread_snapshot_count++] = candidate;
+        }
+    }
+
+    k_spin_unlock(&message_history->lock, key);
+
+    if (g_thread_snapshot_count == 0) {
+        g_ui_state.thread_message_index = 0;
+        return;
+    }
+
+    if (g_ui_state.thread_message_index >= g_thread_snapshot_count) {
+        g_ui_state.thread_message_index = g_thread_snapshot_count - 1;
+    }
+}
+
+static void rebuild_broadcast_thread_snapshot(struct messageHistory *message_history)
+{
+    g_thread_snapshot_count = 0;
+
+    if (message_history == NULL) {
+        return;
+    }
+
+    k_spinlock_key_t key = k_spin_lock(&message_history->lock);
+    size_t count = message_history->count;
+    size_t start = 0;
+
+    if (count > MAX_MESSAGE_HISTORY) {
+        start = count - MAX_MESSAGE_HISTORY;
+    }
+
+    for (size_t seq = start; seq < count; seq++) {
+        struct message candidate = message_history->messages[seq % MAX_MESSAGE_HISTORY];
+
+        if (!is_broadcast_thread_message(&candidate)) {
             continue;
         }
 
@@ -177,14 +234,17 @@ static int render_thread_screen(struct messageHistory *message_history, struct n
     }
 
     uint32_t my_node_num = node_history->my_info.num;
-    uint32_t peer_node_num = (uint32_t)g_ui_state.thread_node_num;
-    rebuild_thread_snapshot(message_history, my_node_num, peer_node_num);
-
-    char target_label[40];
-    resolve_sender_name(node_history,
-                        g_ui_state.thread_node_num,
-                        target_label,
-                        sizeof(target_label));
+    char target_label[40] = "BROADCAST";
+    if (g_ui_state.thread_broadcast) {
+        rebuild_broadcast_thread_snapshot(message_history);
+    } else {
+        uint32_t peer_node_num = (uint32_t)g_ui_state.thread_node_num;
+        rebuild_thread_snapshot(message_history, my_node_num, peer_node_num);
+        resolve_sender_name(node_history,
+                            g_ui_state.thread_node_num,
+                            target_label,
+                            sizeof(target_label));
+    }
 
     if (g_thread_snapshot_count == 0) {
         return weact_epd154_show_thread_screen(target_label,
@@ -249,6 +309,83 @@ static void render_compose(const struct nodeHistory *node_history)
                                      g_ui_state.compose_broadcast);
 }
 
+static void rebuild_node_picker_snapshot(const struct nodeHistory *node_history)
+{
+    g_node_snapshot_count = 0;
+
+    if (node_history == NULL) {
+        return;
+    }
+
+    uint32_t my_node = node_history->my_info.valid ? node_history->my_info.num : 0;
+    k_spinlock_key_t key = k_spin_lock((struct k_spinlock *)&node_history->lock);
+    size_t count = node_history->count < MAX_NODE_HISTORY ? node_history->count : MAX_NODE_HISTORY;
+
+    for (size_t i = 0; i < count && g_node_snapshot_count < MAX_NODE_HISTORY; i++) {
+        const struct node_info *n = &node_history->nodes[i];
+        if (!n->valid || n->num == 0 || n->num == my_node) {
+            continue;
+        }
+
+        bool duplicate = false;
+        for (size_t s = 0; s < g_node_snapshot_count; s++) {
+            if (g_node_snapshot[s].node_num == n->num) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+
+        char *label = g_node_snapshot_labels[g_node_snapshot_count];
+        if (n->long_name[0] != '\0') {
+            strncpy(label, n->long_name, 39);
+            label[39] = '\0';
+        } else if (n->short_name[0] != '\0') {
+            strncpy(label, n->short_name, 39);
+            label[39] = '\0';
+        } else {
+            snprintf(label, 40, "0x%08X", (unsigned int)n->num);
+        }
+
+        g_node_snapshot[g_node_snapshot_count].node_num = n->num;
+        g_node_snapshot[g_node_snapshot_count].label = label;
+        g_node_snapshot_last_heard[g_node_snapshot_count] = n->last_heard;
+        g_node_snapshot_count++;
+    }
+
+    k_spin_unlock((struct k_spinlock *)&node_history->lock, key);
+
+    for (size_t i = 0; i + 1 < g_node_snapshot_count; i++) {
+        for (size_t j = i + 1; j < g_node_snapshot_count; j++) {
+            if (g_node_snapshot_last_heard[j] > g_node_snapshot_last_heard[i]) {
+                uint32_t tmp_heard = g_node_snapshot_last_heard[i];
+                g_node_snapshot_last_heard[i] = g_node_snapshot_last_heard[j];
+                g_node_snapshot_last_heard[j] = tmp_heard;
+
+                struct weact_epd154_node_entry tmp_node = g_node_snapshot[i];
+                g_node_snapshot[i] = g_node_snapshot[j];
+                g_node_snapshot[j] = tmp_node;
+            }
+        }
+    }
+
+    if (g_node_snapshot_count == 0) {
+        g_ui_state.node_picker_index = 0;
+    } else if (g_ui_state.node_picker_index >= g_node_snapshot_count) {
+        g_ui_state.node_picker_index = g_node_snapshot_count - 1;
+    }
+}
+
+static int render_node_picker(const struct nodeHistory *node_history)
+{
+    rebuild_node_picker_snapshot(node_history);
+    return weact_epd154_show_node_picker_screen(g_node_snapshot,
+                                                g_node_snapshot_count,
+                                                g_ui_state.node_picker_index);
+}
+
 static bool resolve_thread_target(struct messageHistory *message_history,
                                   const struct nodeHistory *node_history, int32_t *out_node_num)
 {
@@ -301,9 +438,10 @@ int screen_ui_refresh(struct messageHistory *message_history, struct nodeHistory
         screen_text = latest.text;
         sender_name = resolve_sender_name(node_history, latest.from, sender_name_buf, sizeof(sender_name_buf));
 
-        bool show_popup = true;
+        bool show_popup = (latest.id != g_ui_state.last_handled_incoming_id);
         if (g_ui_state.thread_active &&
-            (uint32_t)g_ui_state.thread_node_num == (uint32_t)latest.from) {
+            ((g_ui_state.thread_broadcast && (uint32_t)latest.to == 0xFFFFFFFFu) ||
+             (!g_ui_state.thread_broadcast && (uint32_t)g_ui_state.thread_node_num == (uint32_t)latest.from))) {
             show_popup = false;
         }
 
@@ -311,17 +449,22 @@ int screen_ui_refresh(struct messageHistory *message_history, struct nodeHistory
         if (g_ui_state.thread_active) {
             // Just a no-op now - display will read from main's message_history when rendering
             ret = weact_epd154_record_received_message();
-            if ((uint32_t)g_ui_state.thread_node_num == (uint32_t)latest.from) {
+            if ((g_ui_state.thread_broadcast && (uint32_t)latest.to == 0xFFFFFFFFu) ||
+                (!g_ui_state.thread_broadcast && (uint32_t)g_ui_state.thread_node_num == (uint32_t)latest.from)) {
                 // Clamp to newest so thread window shows the latest 3 entries.
                 g_ui_state.thread_message_index = (size_t)MAX_MESSAGE_HISTORY;
             }
+        } else if (g_ui_state.compose_active || g_ui_state.node_picker_active) {
+            ret = weact_epd154_record_received_message();
         } else {
             ret = weact_epd154_show_received_message(message_history, node_history, show_popup);
         }
         if (ret < 0) {
             return ret;
         }
-    } else if (!g_ui_state.thread_active && !g_ui_state.compose_active) {
+
+        g_ui_state.last_handled_incoming_id = latest.id;
+    } else if (!g_ui_state.thread_active && !g_ui_state.compose_active && !g_ui_state.node_picker_active) {
         int ret = weact_epd154_show_message_screen(message_history, node_history);
         if (ret < 0) {
             return ret;
@@ -336,6 +479,13 @@ int screen_ui_refresh(struct messageHistory *message_history, struct nodeHistory
         int thread_ret = render_thread_screen(message_history, node_history);
         if (thread_ret < 0) {
             return thread_ret;
+        }
+    }
+
+    if (g_ui_state.node_picker_active) {
+        int picker_ret = render_node_picker(node_history);
+        if (picker_ret < 0) {
+            return picker_ret;
         }
     }
 
@@ -355,11 +505,13 @@ int screen_ui_handle_action(struct messageHistory *message_history,
     if (action == SCREEN_UI_ACTION_HOME) {
         g_ui_state.compose_active = false;
         g_ui_state.thread_active = false;
+        g_ui_state.thread_broadcast = false;
+        g_ui_state.node_picker_active = false;
         return screen_ui_refresh(message_history, node_history);
     }
 
     // If not in a dm or compose screen
-    if (!g_ui_state.compose_active && !g_ui_state.thread_active) {
+    if (!g_ui_state.compose_active && !g_ui_state.thread_active && !g_ui_state.node_picker_active) {
         if (action == SCREEN_UI_ACTION_PREVIOUS) {
             return weact_epd154_previous_message(message_history, node_history);
         }
@@ -370,6 +522,17 @@ int screen_ui_handle_action(struct messageHistory *message_history,
 
         // Enter thread view for the selected message's peer node.
         if (action == SCREEN_UI_ACTION_PRIMARY) {
+            if (weact_epd154_is_broadcast_compose_selected(message_history, node_history)) {
+                g_ui_state.thread_active = true;
+                g_ui_state.thread_broadcast = true;
+                g_ui_state.thread_message_index = 0;
+                rebuild_broadcast_thread_snapshot(message_history);
+                if (g_thread_snapshot_count > 0) {
+                    g_ui_state.thread_message_index = g_thread_snapshot_count - 1;
+                }
+                return render_thread_screen(message_history, node_history);
+            }
+
             int32_t thread_node = 0;
             // If broadcast or unable to resolve a peer node, do not enter thread view since there is no meaningful thread to show.
             if (!resolve_thread_target(message_history, node_history, &thread_node)) {
@@ -377,6 +540,7 @@ int screen_ui_handle_action(struct messageHistory *message_history,
             }
 
             g_ui_state.thread_active = true;
+            g_ui_state.thread_broadcast = false;
             g_ui_state.thread_node_num = thread_node;
             g_ui_state.thread_message_index = 0;
             if (node_history != NULL && node_history->my_info.valid) {
@@ -394,12 +558,53 @@ int screen_ui_handle_action(struct messageHistory *message_history,
 
         // Enter compose screen in broadcast mode with no selected target.
         if (action == SCREEN_UI_ACTION_SECONDARY) {
+            g_ui_state.node_picker_active = true;
+            g_ui_state.node_picker_index = 0;
+            return render_node_picker(node_history);
+        }
+
+        return 0;
+    }
+
+    if (g_ui_state.node_picker_active && !g_ui_state.compose_active && !g_ui_state.thread_active) {
+        if (action == SCREEN_UI_ACTION_PREVIOUS || action == SCREEN_UI_ACTION_NEXT) {
+            rebuild_node_picker_snapshot(node_history);
+
+            if (g_node_snapshot_count == 0) {
+                return render_node_picker(node_history);
+            }
+
+            if (action == SCREEN_UI_ACTION_PREVIOUS) {
+                if (g_ui_state.node_picker_index == 0) {
+                    g_ui_state.node_picker_index = g_node_snapshot_count - 1;
+                } else {
+                    g_ui_state.node_picker_index--;
+                }
+            } else {
+                g_ui_state.node_picker_index = (g_ui_state.node_picker_index + 1) % g_node_snapshot_count;
+            }
+
+            return render_node_picker(node_history);
+        }
+
+        if (action == SCREEN_UI_ACTION_PRIMARY) {
+            rebuild_node_picker_snapshot(node_history);
+            if (g_node_snapshot_count == 0) {
+                return render_node_picker(node_history);
+            }
+
+            g_ui_state.node_picker_active = false;
             g_ui_state.compose_active = true;
+            g_ui_state.compose_broadcast = false;
             g_ui_state.quick_reply_index = 0;
-            g_ui_state.selected_target_node = 0;
-            g_ui_state.compose_broadcast = true;
+            g_ui_state.selected_target_node = (int32_t)g_node_snapshot[g_ui_state.node_picker_index].node_num;
             render_compose(node_history);
             return 0;
+        }
+
+        if (action == SCREEN_UI_ACTION_SECONDARY) {
+            g_ui_state.node_picker_active = false;
+            return screen_ui_refresh(message_history, node_history);
         }
 
         return 0;
@@ -412,9 +617,13 @@ int screen_ui_handle_action(struct messageHistory *message_history,
                 return 0;
             }
 
-            rebuild_thread_snapshot(message_history,
-                                    node_history->my_info.num,
-                                    (uint32_t)g_ui_state.thread_node_num);
+            if (g_ui_state.thread_broadcast) {
+                rebuild_broadcast_thread_snapshot(message_history);
+            } else {
+                rebuild_thread_snapshot(message_history,
+                                        node_history->my_info.num,
+                                        (uint32_t)g_ui_state.thread_node_num);
+            }
             if (g_thread_snapshot_count == 0) {
                 return render_thread_screen(message_history, node_history);
             }
@@ -437,8 +646,8 @@ int screen_ui_handle_action(struct messageHistory *message_history,
         if (action == SCREEN_UI_ACTION_PRIMARY) {
             g_ui_state.compose_active = true;
             g_ui_state.quick_reply_index = 0;
-            g_ui_state.selected_target_node = g_ui_state.thread_node_num;
-            g_ui_state.compose_broadcast = false;
+            g_ui_state.selected_target_node = g_ui_state.thread_broadcast ? 0 : g_ui_state.thread_node_num;
+            g_ui_state.compose_broadcast = g_ui_state.thread_broadcast;
             render_compose(node_history);
             return 0;
         }
@@ -446,6 +655,7 @@ int screen_ui_handle_action(struct messageHistory *message_history,
         // Exit back to inbox and reset thread state.
         if (action == SCREEN_UI_ACTION_SECONDARY) {
             g_ui_state.thread_active = false;
+            g_ui_state.thread_broadcast = false;
             return screen_ui_refresh(message_history, node_history);
         }
 
@@ -482,7 +692,12 @@ int screen_ui_handle_action(struct messageHistory *message_history,
 
         g_ui_state.compose_active = false;
         if (g_ui_state.compose_broadcast) {
-            g_ui_state.thread_active = false;
+            if (g_ui_state.thread_active && g_ui_state.thread_broadcast) {
+                g_ui_state.thread_message_index = (size_t)MAX_MESSAGE_HISTORY;
+            } else {
+                g_ui_state.thread_active = false;
+                g_ui_state.thread_broadcast = false;
+            }
         } else if (g_ui_state.thread_active) {
             // Force the DM screen to clamp to the newest entry after the send is recorded.
             g_ui_state.thread_message_index = (size_t)MAX_MESSAGE_HISTORY;
