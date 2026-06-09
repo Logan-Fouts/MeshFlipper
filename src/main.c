@@ -15,21 +15,14 @@
 #include "display/weact_epd154.h"
 #include "ui/screen_ui.h"
 #include "cb_args.h"
+#include "ui/buttons.h"
 
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 static const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 
-#define BUTTON_PREV_PIN 2
-#define BUTTON_PRIMARY_PIN 3
-#define BUTTON_NEXT_PIN 4
-#define BUTTON_SECONDARY_PIN 5
-#define BUTTON_POLL_MS 60
-#define BUTTON_HOME_HOLD_MS 700
-
-// Ring buffer instance (global so uart_comms.c can access it via extern)
 ring_buffer_t msg_ring_buffer;
 
-// Thread stack and control block for message processing
+// Allocate stack for the message processing thread. Size is set to 4096 bytes to accommodate potential large messages and processing time, especially when updating the EPD screen which can be resource-intensive.
 K_THREAD_STACK_DEFINE(msg_task_stack, 4096);
 static struct k_thread msg_task_thread;
 
@@ -38,41 +31,6 @@ struct messageHistory message_history = { .count = 0 };
 struct nodeHistory node_list = { .count = 0 };
 struct cb_args user_cb_args = { .message_history = &message_history, .node_list = &node_list };
 
-struct button_state {
-    uint8_t pin;
-    int last_level;
-    int64_t pressed_since_ms;
-    bool long_press_handled;
-};
-
-static struct button_state buttons[] = {
-    { .pin = BUTTON_PREV_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
-    { .pin = BUTTON_PRIMARY_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
-    { .pin = BUTTON_NEXT_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
-    { .pin = BUTTON_SECONDARY_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
-};
-
-static int configure_button_inputs(void)
-{
-    if (!device_is_ready(gpio_dev)) {
-        printk("Error: GPIO device is not ready\n");
-        return -ENODEV;
-    }
-
-    for (size_t i = 0; i < ARRAY_SIZE(buttons); i++) {
-        int ret = gpio_pin_configure(gpio_dev, buttons[i].pin, GPIO_INPUT | GPIO_PULL_UP);
-        if (ret < 0) {
-            printk("Error: failed to configure GPIO%u (%d)\n", buttons[i].pin, ret);
-            return ret;
-        }
-
-        buttons[i].last_level = gpio_pin_get(gpio_dev, buttons[i].pin);
-        buttons[i].pressed_since_ms = 0;
-        buttons[i].long_press_handled = false;
-    }
-
-    return 0;
-}
 
 static bool wait_for_my_node_info(int timeout_ms)
 {
@@ -87,7 +45,7 @@ static bool wait_for_my_node_info(int timeout_ms)
     return node_list.my_info.valid;
 }
 
-int setup()
+int setup(struct button_state *buttons, int num_buttons)
 {
     if (!device_is_ready(uart_dev)) {
         printk("Error: UART device is not ready\n");
@@ -124,7 +82,7 @@ int setup()
 
     ring_buffer_init(&msg_ring_buffer);
 
-    if (configure_button_inputs() < 0) {
+    if (configure_button_inputs(buttons, gpio_dev, num_buttons) < 0) {
         return 0;
     }
 
@@ -173,9 +131,9 @@ void process_messages_task(void)
     }
 }
 
-static void poll_buttons_and_drive_ui(void)
+static void poll_buttons_and_drive_ui(struct button_state *buttons, int num_buttons)
 {
-    for (size_t i = 0; i < ARRAY_SIZE(buttons); i++) {
+    for (size_t i = 0; i < num_buttons; i++) {
         int level = gpio_pin_get(gpio_dev, buttons[i].pin);
         if (level < 0) {
             continue;
@@ -257,18 +215,22 @@ static void poll_buttons_and_drive_ui(void)
     }
 }
 
-void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms)
+void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms, struct button_state *buttons, int num_buttons, bool print_stats)
 {
     int64_t next_stats_ms = k_uptime_get() + 10000;
 
     while (1) {
         k_sleep(K_MSEC(BUTTON_POLL_MS));
-        poll_buttons_and_drive_ui();
+        poll_buttons_and_drive_ui(buttons, num_buttons);
 
         int64_t now_ms = k_uptime_get();
         if (now_ms >= next_want_config_ms) {
             send_want_config();
             next_want_config_ms = now_ms + want_config_interval_ms;
+        }
+
+        if (!print_stats) {
+            continue;
         }
 
         if (now_ms < next_stats_ms) {
@@ -309,7 +271,14 @@ int main(void)
 {
     printk("Starting MeshFlipper...\n");
 
-    if (setup() == 0) {
+    struct button_state buttons[] = {
+        { .pin = BUTTON_PREV_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
+        { .pin = BUTTON_PRIMARY_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
+        { .pin = BUTTON_NEXT_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
+        { .pin = BUTTON_SECONDARY_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
+    };
+
+    if (setup(buttons, ARRAY_SIZE(buttons)) == 0) {
         printk("Setup failed. Exiting.\n");
         return -1;
     }
@@ -336,7 +305,7 @@ int main(void)
     const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // 2 minutes
     int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
 
-    run_loop(next_want_config_ms, want_config_interval_ms);
+    run_loop(next_want_config_ms, want_config_interval_ms, buttons, ARRAY_SIZE(buttons), false);
 
     return 0;
 }

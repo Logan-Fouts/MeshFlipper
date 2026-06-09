@@ -42,6 +42,7 @@ target_sources(
     src/communication/ring_buffer.c
     src/ui/screen_ui.c
     src/display/weact_epd154.c
+    src/ui/buttons.c
 )
 
 target_include_directories(
