@@ -11,7 +11,7 @@
 struct button_state {
     uint8_t pin;
     int last_level;
-    int64_t pressed_since_ms;
+    int64_t prev_press_time;
     bool long_press_handled;
 };
 

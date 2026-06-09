@@ -18,7 +18,7 @@ int configure_button_inputs(struct button_state *buttons, const struct device *g
         }
 
         buttons[i].last_level = gpio_pin_get(gpio_dev, buttons[i].pin);
-        buttons[i].pressed_since_ms = 0;
+        buttons[i].prev_press_time = 0;
         buttons[i].long_press_handled = false;
     }
 

@@ -17,6 +17,9 @@
 #include "cb_args.h"
 #include "ui/buttons.h"
 
+#define GPIO_HIGH 1
+#define GPIO_LOW 0
+
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 static const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 
@@ -94,10 +97,8 @@ void process_messages_task(void)
     meshtastic_FromRadio msg;
     
     while (1) {
-        // Wait for a message indefinitely
-        if (ring_buffer_wait(&msg_ring_buffer, K_FOREVER)) {
-            // Get all available messages
-            while (ring_buffer_get(&msg_ring_buffer, &msg)) {
+        if (ring_buffer_wait(&msg_ring_buffer, K_FOREVER)) { // Wait for a message to be available in the ring buffer
+            while (ring_buffer_get(&msg_ring_buffer, &msg)) { // Get all available messages
                 // Process the message
                 if (msg.which_payload_variant == meshtastic_FromRadio_queueStatus_tag) {
                     printk("QueueStatus: res=%d free=%u/%u mesh_packet_id=%u\n",
@@ -131,92 +132,138 @@ void process_messages_task(void)
     }
 }
 
+bool process_button_state(struct button_state *button, bool *falling_edge, bool *rising_edge, bool *is_secondary) 
+{
+    int level = gpio_pin_get(gpio_dev, button->pin);
+
+    // If we fail to read the button state, skip processing for this button.
+    if (level < 0) {
+        return false;
+    }
+
+    *falling_edge = (button->last_level == GPIO_HIGH && level == GPIO_LOW); // Button pressed
+    *rising_edge = (button->last_level == GPIO_LOW && level == GPIO_HIGH); // Button released
+    *is_secondary = (button->pin == BUTTON_SECONDARY_PIN);
+
+    if (*falling_edge) {
+        button->prev_press_time = k_uptime_get();
+        button->long_press_handled = false;
+    }
+
+    // Check for long press on secondary button to trigger home action
+    if (*is_secondary && level == GPIO_LOW && !button->long_press_handled &&
+        button->prev_press_time > 0 && (k_uptime_get() - button->prev_press_time) >= BUTTON_HOME_HOLD_MS) {
+
+        int ui_ret = screen_ui_handle_action(&message_history, &node_list, SCREEN_UI_ACTION_HOME);
+
+        if (ui_ret < 0) {
+            printk("UI home action failed: %d\n", ui_ret);
+        }
+
+        button->long_press_handled = true;
+    }
+    button->last_level = level;
+
+    if (*rising_edge) {
+        button->prev_press_time = 0;
+    }
+
+    return true;
+}
+
+void drive_ui(struct button_state *button, bool falling_edge, bool rising_edge, bool is_secondary)
+{
+    // For secondary button, we want to trigger on the rising edge but only if the long press action hasn't already been triggered. For other buttons, we trigger on the falling edge.
+    bool trigger_action = false;
+    if (is_secondary) trigger_action = rising_edge && !button->long_press_handled;
+    else trigger_action = falling_edge;
+
+    if (!trigger_action) {
+        return;
+    }
+
+    enum screen_ui_action action;
+    switch (button->pin)
+    {
+    case BUTTON_PREV_PIN:
+        action = SCREEN_UI_ACTION_PREVIOUS;
+        break;
+    case BUTTON_NEXT_PIN:
+        action = SCREEN_UI_ACTION_NEXT;
+        break;
+    case BUTTON_PRIMARY_PIN:
+        action = SCREEN_UI_ACTION_PRIMARY;
+        break;
+    case BUTTON_SECONDARY_PIN:
+        action = SCREEN_UI_ACTION_SECONDARY;
+        break;
+    default:
+        return;
+    }
+
+    int ui_ret = screen_ui_handle_action(&message_history, &node_list, action);
+    if (ui_ret < 0) {
+        printk("UI action failed: %d\n", ui_ret);
+    }
+
+    // Check for pending message from the UI and if none then skip send logic.
+    struct screen_ui_outgoing outgoing;
+    if (!screen_ui_take_outgoing(&outgoing) || !outgoing.valid) {
+        return;
+    }
+
+    if (!node_list.my_info.valid) {
+        printk("Cannot send yet: my node info not ready\n");
+        screen_ui_refresh(&message_history, &node_list);
+        return;
+    }
+
+    int send_ret = send_message_to_node(outgoing.target_node, outgoing.text, node_list.my_info.num, &message_history);
+
+    if (send_ret < 0) {
+        printk("Send failed: %d\n", send_ret);
+    }
+
+    screen_ui_refresh(&message_history, &node_list);
+}
+
 static void poll_buttons_and_drive_ui(struct button_state *buttons, int num_buttons)
 {
     for (size_t i = 0; i < num_buttons; i++) {
-        int level = gpio_pin_get(gpio_dev, buttons[i].pin);
-        if (level < 0) {
+        bool falling_edge, rising_edge, is_secondary;
+
+        if (!process_button_state(&buttons[i], &falling_edge, &rising_edge, &is_secondary)) {
             continue;
         }
 
-        int previous_level = buttons[i].last_level;
-        bool falling_edge = (previous_level > 0 && level == 0);
-        bool rising_edge = (previous_level == 0 && level > 0);
-        bool is_secondary = (buttons[i].pin == BUTTON_SECONDARY_PIN);
-
-        if (falling_edge) {
-            buttons[i].pressed_since_ms = k_uptime_get();
-            buttons[i].long_press_handled = false;
-        }
-
-        if (is_secondary && level == 0 && !buttons[i].long_press_handled &&
-            buttons[i].pressed_since_ms > 0 &&
-            (k_uptime_get() - buttons[i].pressed_since_ms) >= BUTTON_HOME_HOLD_MS) {
-            int ui_ret = screen_ui_handle_action(&message_history, &node_list, SCREEN_UI_ACTION_HOME);
-            if (ui_ret < 0) {
-                printk("UI home action failed: %d\n", ui_ret);
-            }
-            buttons[i].long_press_handled = true;
-        }
-        buttons[i].last_level = level;
-
-        if (rising_edge) {
-            buttons[i].pressed_since_ms = 0;
-        }
-
-        bool trigger_action = false;
-        if (is_secondary) {
-            trigger_action = rising_edge && !buttons[i].long_press_handled;
-        } else {
-            trigger_action = falling_edge;
-        }
-
-        if (!trigger_action) {
-            continue;
-        }
-
-        enum screen_ui_action action;
-        if (buttons[i].pin == BUTTON_PREV_PIN) {
-            action = SCREEN_UI_ACTION_PREVIOUS;
-        } else if (buttons[i].pin == BUTTON_NEXT_PIN) {
-            action = SCREEN_UI_ACTION_NEXT;
-        } else if (buttons[i].pin == BUTTON_PRIMARY_PIN) {
-            action = SCREEN_UI_ACTION_PRIMARY;
-        } else {
-            action = SCREEN_UI_ACTION_SECONDARY;
-        }
-
-        int ui_ret = screen_ui_handle_action(&message_history, &node_list, action);
-        if (ui_ret < 0) {
-            printk("UI action failed: %d\n", ui_ret);
-        }
-
-        // Check for pending message from the UI and if none then skip send logic.
-        struct screen_ui_outgoing outgoing;
-        if (!screen_ui_take_outgoing(&outgoing) || !outgoing.valid) {
-            continue;
-        }
-
-        if (!node_list.my_info.valid) {
-            printk("Cannot send yet: my node info not ready\n");
-            screen_ui_refresh(&message_history, &node_list);
-            continue;
-        }
-
-        int send_ret = send_message_to_node(outgoing.target_node,
-                                            outgoing.text,
-                                            node_list.my_info.num,
-                                            &message_history);
-        if (send_ret < 0) {
-            printk("Send failed: %d\n", send_ret);
-        }
-
-        screen_ui_refresh(&message_history, &node_list);
+        drive_ui(&buttons[i], falling_edge, rising_edge, is_secondary);
+        
     }
 }
 
-void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms, struct button_state *buttons, int num_buttons, bool print_stats)
+void print_debug_stats()
 {
+    printk("\n\n");
+    printk("╔══════════════════════════════════════════════════════════════╗\n");
+    printk("║                    SYSTEM STATUS REPORT                      ║\n");
+    printk("╠══════════════════════════════════════════════════════════════╣\n");
+    printk("║ Message Store                                                 \n");
+    printk("║   • Total messages   : %-8zu                                   \n", message_history.count);
+    printk("║   • Total nodes      : %-8zu                                   \n", node_list.count);
+    printk("╚══════════════════════════════════════════════════════════════╝\n");
+    if (message_history.count > 0) {
+        printk("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        printk("  COMPLETE MESSAGE HISTORY (%zu messages)\n", message_history.count);
+        printk("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        print_message_history(&message_history);
+    } else {
+        printk("\n  No messages received yet.\n");
+    }
+}
+
+void run_loop(int64_t want_config_interval_ms, struct button_state *buttons, int num_buttons, bool print_stats)
+{
+    int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
     int64_t next_stats_ms = k_uptime_get() + 10000;
 
     while (1) {
@@ -229,40 +276,10 @@ void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms, stru
             next_want_config_ms = now_ms + want_config_interval_ms;
         }
 
-        if (!print_stats) {
-            continue;
-        }
-
-        if (now_ms < next_stats_ms) {
-            continue;
-        }
-
-        next_stats_ms = now_ms + 10000;
-
-        // ========== STATISTICS SECTION ==========
-        printk("\n\n");
-        printk("╔══════════════════════════════════════════════════════════════╗\n");
-        printk("║                    SYSTEM STATUS REPORT                      ║\n");
-        printk("╠══════════════════════════════════════════════════════════════╣\n");
-        printk("║ UART RX Statistics                                           \n");
-        printk("║   • Frames received : %-8zu                                   \n", rx_frames_received);
-        printk("║   • Frames dropped   : %-8zu                                   \n", rx_frames_dropped);
-        printk("║   • Bytes processed  : %-8zu                                   \n", rx_bytes_processed);
-        printk("║   • Ring buffer drops: %-8zu                                   \n", ring_buffer_get_dropped(&msg_ring_buffer));
-        printk("╠══════════════════════════════════════════════════════════════╣\n");
-        printk("║ Message Store                                                 \n");
-        printk("║   • Total messages   : %-8zu                                   \n", message_history.count);
-        printk("║   • Total nodes      : %-8zu                                   \n", node_list.count);
-        printk("╚══════════════════════════════════════════════════════════════╝\n");
-
-        // ========== MESSAGE HISTORY ==========
-        if (message_history.count > 0) {
-            printk("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-            printk("  COMPLETE MESSAGE HISTORY (%zu messages)\n", message_history.count);
-            printk("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-            print_message_history(&message_history);
-        } else {
-            printk("\n  No messages received yet.\n");
+        if (print_stats) {
+            if (now_ms < next_stats_ms) continue;
+            next_stats_ms = now_ms + 10000;
+            print_debug_stats();
         }
     }
 }
@@ -270,12 +287,15 @@ void run_loop(int64_t next_want_config_ms, int64_t want_config_interval_ms, stru
 int main(void)
 {
     printk("Starting MeshFlipper...\n");
+    bool debug_stats = false;
+    const int max_node_info_wait_time = 30000; // 30 seconds
+    const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // 2 minutes
 
     struct button_state buttons[] = {
-        { .pin = BUTTON_PREV_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
-        { .pin = BUTTON_PRIMARY_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
-        { .pin = BUTTON_NEXT_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
-        { .pin = BUTTON_SECONDARY_PIN, .last_level = 1, .pressed_since_ms = 0, .long_press_handled = false },
+        { .pin = BUTTON_PREV_PIN, .last_level = 1, .prev_press_time = 0, .long_press_handled = false },
+        { .pin = BUTTON_PRIMARY_PIN, .last_level = 1, .prev_press_time = 0, .long_press_handled = false },
+        { .pin = BUTTON_NEXT_PIN, .last_level = 1, .prev_press_time = 0, .long_press_handled = false },
+        { .pin = BUTTON_SECONDARY_PIN, .last_level = 1, .prev_press_time = 0, .long_press_handled = false },
     };
 
     if (setup(buttons, ARRAY_SIZE(buttons)) == 0) {
@@ -295,17 +315,13 @@ int main(void)
         NULL, NULL, NULL,
         K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
 
-    if (!wait_for_my_node_info(30000)) {
-        printk("MyNodeInfo not received yet; skipping startup test send.\n");
+    if (!wait_for_my_node_info(max_node_info_wait_time)) {
+        printk("Could not get my node info after %d seconds. Exiting.\n", max_node_info_wait_time / 1000);
+        return -1;
     }
 
-    // print_my_node_info(&node_list.my_info);
 
-    // Periodically send want_config_id
-    const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // 2 minutes
-    int64_t next_want_config_ms = k_uptime_get() + want_config_interval_ms;
-
-    run_loop(next_want_config_ms, want_config_interval_ms, buttons, ARRAY_SIZE(buttons), false);
+    run_loop(want_config_interval_ms, buttons, ARRAY_SIZE(buttons), debug_stats);
 
     return 0;
 }
