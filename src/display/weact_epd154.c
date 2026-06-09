@@ -753,6 +753,7 @@ static void draw_ui(struct messageHistory *hist, const struct nodeHistory *node_
 
             if (visible_idx == selected_pos) {
                 epd_draw_rect(4, row_y - 1, EPD_WIDTH - 8, row_h - 1, true);
+                epd_draw_rect(4, row_y - 2, EPD_WIDTH - 8, row_h, true);
             }
 
             if (idx == INBOX_BROADCAST_COMPOSE_INDEX) {
@@ -984,115 +985,176 @@ int weact_epd154_show_thread_screen(const char *target_label,
 {
     epd_frame_clear();
 
-    epd_draw_filled_rect(8, 30, EPD_WIDTH - 16, EPD_HEIGHT - 50, false);
-    epd_draw_rect(8, 30, EPD_WIDTH - 16, EPD_HEIGHT - 50, true);
-
+    // Header
     char title[72];
-    snprintf(title,
-             sizeof(title),
-             "DM %s",
-             target_label != NULL ? target_label : "Unknown");
-    epd_draw_text_limited(14, 36, 1, true, title, 26);
-    epd_draw_hline(10, 48, EPD_WIDTH - 20, true);
-
-    const int bubble_top = 54;
-    const int bubble_gap = 3;
-    const int bubble_area_bottom = EPD_HEIGHT - 32;
-    const int bubble_w = EPD_WIDTH - 84;
-
+    snprintf(title, sizeof(title), "DM: %s", target_label != NULL ? target_label : "Unknown");
+    epd_draw_text_limited(4, 4, 1, false, title, 28);
+    
+    // Position counter on same line as title
+    char pos[24];
+    snprintf(pos, sizeof(pos), "%u/%u", (unsigned int)global_index, (unsigned int)total);
+    epd_draw_text(EPD_WIDTH - 30, 4, 1, false, pos);
+    
+    // Header separator line
+    epd_draw_hline(0, 20, EPD_WIDTH, true);
+    epd_draw_hline(0, 21, EPD_WIDTH, true);
+    epd_draw_hline(0, 22, EPD_WIDTH, true);
+    
+    // Main message area
+    const int message_top = 28;
+    const int message_bottom = EPD_HEIGHT - 28;
+    const int bubble_gap = 4;
+    
+    // Fixed bubble width at 75% of screen
+    const int bubble_width = (EPD_WIDTH * 75) / 100;  // 75% of screen width
+    const int bubble_padding = 10;    // Padding from screen edge
+    
     int bubble_heights[WEACT_EPD154_THREAD_VISIBLE] = {0};
     size_t bubble_lines[WEACT_EPD154_THREAD_VISIBLE] = {0};
-
+    
     if (entries == NULL || entry_count == 0) {
-        epd_draw_text(14, bubble_top + 8, 1, false, "NO DM MESSAGES YET");
+        // Center the "no messages" text
+        int text_width = strlen("NO MESSAGES YET") * 6;
+        int text_x = (EPD_WIDTH - text_width) / 2;
+        epd_draw_text(text_x, message_top + 40, 1, false, "NO MESSAGES YET");
     } else {
-        size_t chars_per_line = (size_t)((bubble_w - 8) / 6);
-        if (chars_per_line == 0) {
-            chars_per_line = 1;
-        }
-
+        // Calculate characters per line based on fixed bubble width
+        size_t chars_per_line = (size_t)((bubble_width - 12) / 6);
+        if (chars_per_line == 0) chars_per_line = 1;
+        
+        // Calculate bubble heights for ALL messages
         for (size_t i = 0; i < entry_count && i < WEACT_EPD154_THREAD_VISIBLE; i++) {
             size_t lines = 1;
             size_t col = 0;
             const char *text = entries[i].text != NULL ? entries[i].text : "";
-
+            
             for (size_t p = 0; text[p] != '\0'; p++) {
                 if (text[p] == '\n') {
                     lines++;
                     col = 0;
                     continue;
                 }
-
                 col++;
                 if (col > chars_per_line) {
                     lines++;
                     col = 1;
                 }
             }
-
+            
             bubble_lines[i] = lines;
             bubble_heights[i] = 20 + (int)(lines * 8);
         }
-
+        
+        // First, calculate total height of all messages
+        int total_height = 0;
+        for (size_t i = 0; i < entry_count; i++) {
+            total_height += bubble_heights[i];
+            if (i + 1 < entry_count) total_height += bubble_gap;
+        }
+        
+        // Calculate optimal start_visible to show selected message
         size_t start_visible = 0;
-        while (start_visible < entry_count) {
-            int used_height = 0;
-            for (size_t i = start_visible; i < entry_count; i++) {
-                used_height += bubble_heights[i];
-                if (i + 1 < entry_count) {
-                    used_height += bubble_gap;
-                }
-            }
-
-            if ((bubble_top + used_height) <= bubble_area_bottom) {
-                break;
-            }
-
+        int height_above_selected = 0;
+        
+        // Calculate height above the selected message
+        for (size_t i = 0; i < selected_visible_index && i < entry_count; i++) {
+            height_above_selected += bubble_heights[i];
+            if (i + 1 < selected_visible_index) height_above_selected += bubble_gap;
+        }
+        
+        // Available space above and below selected message
+        int available_height = message_bottom - message_top;
+        int target_y_for_selected = available_height / 2; 
+        
+        // Scroll up until selected message is at target position or we hit the top
+        int current_y = height_above_selected;
+        while (start_visible < selected_visible_index && 
+               (current_y - (bubble_heights[start_visible] + bubble_gap)) > target_y_for_selected) {
+            current_y -= (bubble_heights[start_visible] + bubble_gap);
             start_visible++;
         }
-
-        int y = bubble_top;
+        
+        // Ensure we don't show empty space at the bottom
+        int y_used = 0;
         for (size_t i = start_visible; i < entry_count; i++) {
-            bool outgoing = entries[i].is_outgoing;
+            y_used += bubble_heights[i];
+            if (i + 1 < entry_count) y_used += bubble_gap;
+            if (y_used > available_height) {
+                // If we've exceeded the screen, scroll up more
+                if (start_visible < selected_visible_index) {
+                    start_visible++;
+                    i = start_visible; // Restart calculation
+                    y_used = 0;
+                }
+                break;
+            }
+        }
+        
+        // Draw messages
+        int y = message_top;
+        for (size_t i = start_visible; i < entry_count; i++) {
             int bubble_h = bubble_heights[i];
-            int x = outgoing ? (EPD_WIDTH - bubble_w - 14) : 14;
-
-            epd_draw_rect(x, y, bubble_w, bubble_h, true);
-
-            size_t selected_draw_index = selected_visible_index;
-            if (selected_draw_index < start_visible) {
-                selected_draw_index = start_visible;
+            
+            // Check if this message would go off-screen
+            if (y + bubble_h > message_bottom) {
+                break;
             }
-
-            if (selected_draw_index == i) {
-                epd_draw_rect(x - 1, y - 1, bubble_w + 2, bubble_h + 2, true);
+            
+            bool outgoing = entries[i].is_outgoing;
+            
+            // Position: left for THEM, right for YOU
+            int x;
+            if (outgoing) {
+                x = EPD_WIDTH - bubble_width - bubble_padding;
+            } else {
+                x = bubble_padding;
             }
-
-            epd_draw_text(x + 4, y + 3, 1, false, outgoing ? "YOU" : "THEM");
-            epd_draw_hline(x + 2, y + 12, bubble_w - 4, true);
-
+            
+            // Draw bubble background
+            epd_draw_rect(x, y, bubble_width, bubble_h, true);
+            
+            // Highlight selected message
+            if (selected_visible_index == i) {
+                // Thicker border for selected message
+                epd_draw_rect(x - 2, y - 2, bubble_width + 4, bubble_h + 4, true);
+                epd_draw_rect(x - 1, y - 1, bubble_width + 2, bubble_h + 2, true);
+            }
+            
+            if (outgoing) {
+                int label_width = strlen("YOU") * 6;
+                epd_draw_text(x + bubble_width - label_width - 6, y + 2, 1, false, "YOU");
+            } else {
+                epd_draw_text(x + 6, y + 2, 1, false, "THEM");
+            }
+            
+            // Separator line (separates label from message text)
+            epd_draw_hline(x + 4, y + 12, bubble_width - 8, true);
+            
+            // Message text
             char bubble_text[512];
             epd_build_wrapped_preview(bubble_text,
                                       sizeof(bubble_text),
                                       entries[i].text != NULL ? entries[i].text : "",
                                       chars_per_line,
                                       bubble_lines[i]);
-            epd_draw_text(x + 4, y + 15, 1, true, bubble_text);
-
+            epd_draw_text(x + 6, y + 16, 1, true, bubble_text);
+            
             y += bubble_h + bubble_gap;
-            if (y >= bubble_area_bottom) {
-                break;
-            }
         }
     }
-
-    char pos[24];
-    snprintf(pos, sizeof(pos), "%u/%u", (unsigned int)global_index, (unsigned int)total);
-    epd_draw_text(EPD_WIDTH - 52, 36, 1, false, pos);
-
-    epd_draw_hline(10, EPD_HEIGHT - 30, EPD_WIDTH - 20, true);
-    epd_draw_text(14, EPD_HEIGHT - 26, 1, false, "2/4:Msg 3:Reply 5:Back");
-
+    
+    // Footer
+    epd_draw_hline(0, EPD_HEIGHT - 25, EPD_WIDTH, true);
+    epd_draw_hline(0, EPD_HEIGHT - 24, EPD_WIDTH, true);
+    epd_draw_hline(0, EPD_HEIGHT - 23, EPD_WIDTH, true);
+    
+    // Footer text
+    char footer[48];
+    snprintf(footer, sizeof(footer), "2:Prev   3:Reply   4:Next   5:Back");
+    int footer_width = strlen(footer) * 6;
+    int footer_x = (EPD_WIDTH - footer_width) / 2;
+    epd_draw_text(footer_x, EPD_HEIGHT - 18, 1, false, footer);
+    
     return epd_refresh_framebuffer();
 }
 

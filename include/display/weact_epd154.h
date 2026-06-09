@@ -8,7 +8,7 @@
 #include "models/message.h"
 #include "models/node.h"
 
-#define WEACT_EPD154_THREAD_VISIBLE 3
+#define WEACT_EPD154_THREAD_VISIBLE 4
 
 struct weact_epd154_thread_entry {
     const char *text;
