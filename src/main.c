@@ -17,8 +17,6 @@
 #include "cb_args.h"
 #include "ui/buttons.h"
 
-#define GPIO_HIGH 1
-#define GPIO_LOW 0
 
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 static const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
@@ -92,6 +90,26 @@ int setup(struct button_state *buttons, int num_buttons)
     return 1;
 }
 
+void print_debug_stats()
+{
+    printk("\n\n");
+    printk("╔══════════════════════════════════════════════════════════════╗\n");
+    printk("║                    SYSTEM STATUS REPORT                      ║\n");
+    printk("╠══════════════════════════════════════════════════════════════╣\n");
+    printk("║ Message Store                                                 \n");
+    printk("║   • Total messages   : %-8zu                                   \n", message_history.count);
+    printk("║   • Total nodes      : %-8zu                                   \n", node_list.count);
+    printk("╚══════════════════════════════════════════════════════════════╝\n");
+    if (message_history.count > 0) {
+        printk("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        printk("  COMPLETE MESSAGE HISTORY (%zu messages)\n", message_history.count);
+        printk("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        print_message_history(&message_history);
+    } else {
+        printk("\n  No messages received yet.\n");
+    }
+}
+
 void process_messages_task(void)
 {
     meshtastic_FromRadio msg;
@@ -132,132 +150,17 @@ void process_messages_task(void)
     }
 }
 
-bool process_button_state(struct button_state *button, bool *falling_edge, bool *rising_edge, bool *is_secondary) 
-{
-    int level = gpio_pin_get(gpio_dev, button->pin);
-
-    // If we fail to read the button state, skip processing for this button.
-    if (level < 0) {
-        return false;
-    }
-
-    *falling_edge = (button->last_level == GPIO_HIGH && level == GPIO_LOW); // Button pressed
-    *rising_edge = (button->last_level == GPIO_LOW && level == GPIO_HIGH); // Button released
-    *is_secondary = (button->pin == BUTTON_SECONDARY_PIN);
-
-    if (*falling_edge) {
-        button->prev_press_time = k_uptime_get();
-        button->long_press_handled = false;
-    }
-
-    // Check for long press on secondary button to trigger home action
-    if (*is_secondary && level == GPIO_LOW && !button->long_press_handled &&
-        button->prev_press_time > 0 && (k_uptime_get() - button->prev_press_time) >= BUTTON_HOME_HOLD_MS) {
-
-        int ui_ret = screen_ui_handle_action(&message_history, &node_list, SCREEN_UI_ACTION_HOME);
-
-        if (ui_ret < 0) {
-            printk("UI home action failed: %d\n", ui_ret);
-        }
-
-        button->long_press_handled = true;
-    }
-    button->last_level = level;
-
-    if (*rising_edge) {
-        button->prev_press_time = 0;
-    }
-
-    return true;
-}
-
-void drive_ui(struct button_state *button, bool falling_edge, bool rising_edge, bool is_secondary)
-{
-    // For secondary button, we want to trigger on the rising edge but only if the long press action hasn't already been triggered. For other buttons, we trigger on the falling edge.
-    bool trigger_action = false;
-    if (is_secondary) trigger_action = rising_edge && !button->long_press_handled;
-    else trigger_action = falling_edge;
-
-    if (!trigger_action) {
-        return;
-    }
-
-    enum screen_ui_action action;
-    switch (button->pin)
-    {
-    case BUTTON_PREV_PIN:
-        action = SCREEN_UI_ACTION_PREVIOUS;
-        break;
-    case BUTTON_NEXT_PIN:
-        action = SCREEN_UI_ACTION_NEXT;
-        break;
-    case BUTTON_PRIMARY_PIN:
-        action = SCREEN_UI_ACTION_PRIMARY;
-        break;
-    case BUTTON_SECONDARY_PIN:
-        action = SCREEN_UI_ACTION_SECONDARY;
-        break;
-    default:
-        return;
-    }
-
-    int ui_ret = screen_ui_handle_action(&message_history, &node_list, action);
-    if (ui_ret < 0) {
-        printk("UI action failed: %d\n", ui_ret);
-    }
-
-    // Check for pending message from the UI and if none then skip send logic.
-    struct screen_ui_outgoing outgoing;
-    if (!screen_ui_take_outgoing(&outgoing) || !outgoing.valid) {
-        return;
-    }
-
-    if (!node_list.my_info.valid) {
-        printk("Cannot send yet: my node info not ready\n");
-        screen_ui_refresh(&message_history, &node_list);
-        return;
-    }
-
-    int send_ret = send_message_to_node(outgoing.target_node, outgoing.text, node_list.my_info.num, &message_history);
-
-    if (send_ret < 0) {
-        printk("Send failed: %d\n", send_ret);
-    }
-
-    screen_ui_refresh(&message_history, &node_list);
-}
-
 static void poll_buttons_and_drive_ui(struct button_state *buttons, int num_buttons)
 {
     for (size_t i = 0; i < num_buttons; i++) {
         bool falling_edge, rising_edge, is_secondary;
 
-        if (!process_button_state(&buttons[i], &falling_edge, &rising_edge, &is_secondary)) {
+        if (!process_button_state(&buttons[i], &falling_edge, &rising_edge, &is_secondary, gpio_dev, &message_history, &node_list)) {
             continue;
         }
 
-        drive_ui(&buttons[i], falling_edge, rising_edge, is_secondary);
+        drive_ui(&buttons[i], falling_edge, rising_edge, is_secondary, &message_history, &node_list);
         
-    }
-}
-
-void print_debug_stats()
-{
-    printk("\n\n");
-    printk("╔══════════════════════════════════════════════════════════════╗\n");
-    printk("║                    SYSTEM STATUS REPORT                      ║\n");
-    printk("╠══════════════════════════════════════════════════════════════╣\n");
-    printk("║ Message Store                                                 \n");
-    printk("║   • Total messages   : %-8zu                                   \n", message_history.count);
-    printk("║   • Total nodes      : %-8zu                                   \n", node_list.count);
-    printk("╚══════════════════════════════════════════════════════════════╝\n");
-    if (message_history.count > 0) {
-        printk("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-        printk("  COMPLETE MESSAGE HISTORY (%zu messages)\n", message_history.count);
-        printk("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-        print_message_history(&message_history);
-    } else {
-        printk("\n  No messages received yet.\n");
     }
 }
 

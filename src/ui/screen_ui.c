@@ -6,6 +6,7 @@
 
 #include "display/weact_epd154.h"
 #include "ui/screen_ui.h"
+#include "communication/uart_comms.h"
 
 static const char *const quick_replies[] = {
     "Copy that.",
@@ -723,3 +724,61 @@ bool screen_ui_take_outgoing(struct screen_ui_outgoing *outgoing)
     g_ui_state.pending.valid = false;
     return true;
 }
+
+void drive_ui(struct button_state *button, bool falling_edge, bool rising_edge, bool is_secondary, struct messageHistory *message_history, struct nodeHistory *node_list)
+{
+    // For secondary button, we want to trigger on the rising edge but only if the long press action hasn't already been triggered. For other buttons, we trigger on the falling edge.
+    bool trigger_action = false;
+    if (is_secondary) trigger_action = rising_edge && !button->long_press_handled;
+    else trigger_action = falling_edge;
+
+    if (!trigger_action) {
+        return;
+    }
+
+    enum screen_ui_action action;
+    switch (button->pin)
+    {
+    case BUTTON_PREV_PIN:
+        action = SCREEN_UI_ACTION_PREVIOUS;
+        break;
+    case BUTTON_NEXT_PIN:
+        action = SCREEN_UI_ACTION_NEXT;
+        break;
+    case BUTTON_PRIMARY_PIN:
+        action = SCREEN_UI_ACTION_PRIMARY;
+        break;
+    case BUTTON_SECONDARY_PIN:
+        action = SCREEN_UI_ACTION_SECONDARY;
+        break;
+    default:
+        return;
+    }
+
+    int ui_ret = screen_ui_handle_action(message_history, node_list, action);
+    if (ui_ret < 0) {
+        printk("UI action failed: %d\n", ui_ret);
+    }
+
+    // Check for pending message from the UI and if none then skip send logic.
+    struct screen_ui_outgoing outgoing;
+    if (!screen_ui_take_outgoing(&outgoing) || !outgoing.valid) {
+        return;
+    }
+
+    if (!node_list->my_info.valid) {
+        printk("Cannot send yet: my node info not ready\n");
+        screen_ui_refresh(message_history, node_list);
+        return;
+    }
+
+    int send_ret = send_message_to_node(outgoing.target_node, outgoing.text, node_list->my_info.num, message_history);
+
+    if (send_ret < 0) {
+        printk("Send failed: %d\n", send_ret);
+    }
+
+    screen_ui_refresh(message_history, node_list);
+}
+
+

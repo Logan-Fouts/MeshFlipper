@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "ui/buttons.h"
 
 #include "models/message.h"
 #include "models/node.h"
@@ -26,5 +27,6 @@ int screen_ui_handle_action(struct messageHistory *message_history,
                             struct nodeHistory *node_history,
                             enum screen_ui_action action);
 bool screen_ui_take_outgoing(struct screen_ui_outgoing *outgoing);
+void drive_ui(struct button_state *button, bool falling_edge, bool rising_edge, bool is_secondary, struct messageHistory *message_history, struct nodeHistory *node_history);
 
 #endif
