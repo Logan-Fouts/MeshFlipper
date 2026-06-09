@@ -170,7 +170,7 @@ void run_loop(int64_t want_config_interval_ms, struct button_state *buttons, int
     int64_t next_stats_ms = k_uptime_get() + 10000;
 
     while (1) {
-        k_sleep(K_MSEC(BUTTON_POLL_MS));
+        k_sleep(K_MSEC(BUTTON_POLL_MS)); // Put CPU to sleep for a short time to save power and allow other threads to run
         poll_buttons_and_drive_ui(buttons, num_buttons);
 
         int64_t now_ms = k_uptime_get();

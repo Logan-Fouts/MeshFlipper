@@ -348,11 +348,10 @@ static void epd_draw_vline(int x, int y, int h, bool black)
 // Font and text rendering
 static bool epd_get_glyph(char ch, uint8_t glyph[5])
 {
-    char c = (char)toupper((unsigned char)ch);
-
     memset(glyph, 0, 5);
 
-    switch (c) {
+    switch (ch) {
+    // Uppercase letters
     case 'A': glyph[0] = 0x7E; glyph[1] = 0x11; glyph[2] = 0x11; glyph[3] = 0x11; glyph[4] = 0x7E; return true;
     case 'B': glyph[0] = 0x7F; glyph[1] = 0x49; glyph[2] = 0x49; glyph[3] = 0x49; glyph[4] = 0x36; return true;
     case 'C': glyph[0] = 0x3E; glyph[1] = 0x41; glyph[2] = 0x41; glyph[3] = 0x41; glyph[4] = 0x22; return true;
@@ -379,6 +378,36 @@ static bool epd_get_glyph(char ch, uint8_t glyph[5])
     case 'X': glyph[0] = 0x63; glyph[1] = 0x14; glyph[2] = 0x08; glyph[3] = 0x14; glyph[4] = 0x63; return true;
     case 'Y': glyph[0] = 0x07; glyph[1] = 0x08; glyph[2] = 0x70; glyph[3] = 0x08; glyph[4] = 0x07; return true;
     case 'Z': glyph[0] = 0x61; glyph[1] = 0x51; glyph[2] = 0x49; glyph[3] = 0x45; glyph[4] = 0x43; return true;
+    
+    // Lowercase letters
+    case 'a': glyph[0] = 0x20; glyph[1] = 0x54; glyph[2] = 0x54; glyph[3] = 0x54; glyph[4] = 0x78; return true;
+    case 'b': glyph[0] = 0x7F; glyph[1] = 0x44; glyph[2] = 0x44; glyph[3] = 0x44; glyph[4] = 0x38; return true;
+    case 'c': glyph[0] = 0x38; glyph[1] = 0x44; glyph[2] = 0x44; glyph[3] = 0x44; glyph[4] = 0x28; return true;
+    case 'd': glyph[0] = 0x38; glyph[1] = 0x44; glyph[2] = 0x44; glyph[3] = 0x44; glyph[4] = 0x7F; return true;
+    case 'e': glyph[0] = 0x38; glyph[1] = 0x54; glyph[2] = 0x54; glyph[3] = 0x54; glyph[4] = 0x18; return true;
+    case 'f': glyph[0] = 0x08; glyph[1] = 0x7E; glyph[2] = 0x09; glyph[3] = 0x01; glyph[4] = 0x02; return true;
+    case 'g': glyph[0] = 0x18; glyph[1] = 0xA4; glyph[2] = 0xA4; glyph[3] = 0xA4; glyph[4] = 0x7C; return true;
+    case 'h': glyph[0] = 0x7F; glyph[1] = 0x08; glyph[2] = 0x04; glyph[3] = 0x04; glyph[4] = 0x78; return true;
+    case 'i': glyph[0] = 0x00; glyph[1] = 0x44; glyph[2] = 0x7D; glyph[3] = 0x40; glyph[4] = 0x00; return true;
+    case 'j': glyph[0] = 0x40; glyph[1] = 0x80; glyph[2] = 0x84; glyph[3] = 0x7D; glyph[4] = 0x00; return true;
+    case 'k': glyph[0] = 0x7F; glyph[1] = 0x10; glyph[2] = 0x28; glyph[3] = 0x44; glyph[4] = 0x00; return true;
+    case 'l': glyph[0] = 0x41; glyph[1] = 0x41; glyph[2] = 0x7F; glyph[3] = 0x40; glyph[4] = 0x00; return true;
+    case 'm': glyph[0] = 0x7C; glyph[1] = 0x04; glyph[2] = 0x7C; glyph[3] = 0x04; glyph[4] = 0x78; return true;
+    case 'n': glyph[0] = 0x7C; glyph[1] = 0x04; glyph[2] = 0x04; glyph[3] = 0x04; glyph[4] = 0x78; return true;
+    case 'o': glyph[0] = 0x38; glyph[1] = 0x44; glyph[2] = 0x44; glyph[3] = 0x44; glyph[4] = 0x38; return true;
+    case 'p': glyph[0] = 0xFC; glyph[1] = 0x24; glyph[2] = 0x24; glyph[3] = 0x24; glyph[4] = 0x18; return true;
+    case 'q': glyph[0] = 0x18; glyph[1] = 0x24; glyph[2] = 0x24; glyph[3] = 0x24; glyph[4] = 0xFC; return true;
+    case 'r': glyph[0] = 0x7C; glyph[1] = 0x08; glyph[2] = 0x04; glyph[3] = 0x04; glyph[4] = 0x08; return true;
+    case 's': glyph[0] = 0x48; glyph[1] = 0x54; glyph[2] = 0x54; glyph[3] = 0x54; glyph[4] = 0x24; return true;
+    case 't': glyph[0] = 0x04; glyph[1] = 0x3F; glyph[2] = 0x44; glyph[3] = 0x44; glyph[4] = 0x20; return true;
+    case 'u': glyph[0] = 0x3C; glyph[1] = 0x40; glyph[2] = 0x40; glyph[3] = 0x20; glyph[4] = 0x7C; return true;
+    case 'v': glyph[0] = 0x1C; glyph[1] = 0x20; glyph[2] = 0x40; glyph[3] = 0x20; glyph[4] = 0x1C; return true;
+    case 'w': glyph[0] = 0x7C; glyph[1] = 0x20; glyph[2] = 0x18; glyph[3] = 0x20; glyph[4] = 0x7C; return true;
+    case 'x': glyph[0] = 0x44; glyph[1] = 0x28; glyph[2] = 0x10; glyph[3] = 0x28; glyph[4] = 0x44; return true;
+    case 'y': glyph[0] = 0x1C; glyph[1] = 0xA0; glyph[2] = 0xA0; glyph[3] = 0xA0; glyph[4] = 0x7C; return true;
+    case 'z': glyph[0] = 0x44; glyph[1] = 0x64; glyph[2] = 0x54; glyph[3] = 0x4C; glyph[4] = 0x44; return true;
+    
+    // Numbers
     case '0': glyph[0] = 0x3E; glyph[1] = 0x45; glyph[2] = 0x49; glyph[3] = 0x51; glyph[4] = 0x3E; return true;
     case '1': glyph[0] = 0x00; glyph[1] = 0x21; glyph[2] = 0x7F; glyph[3] = 0x40; glyph[4] = 0x00; return true;
     case '2': glyph[0] = 0x42; glyph[1] = 0x61; glyph[2] = 0x51; glyph[3] = 0x49; glyph[4] = 0x46; return true;
@@ -389,23 +418,44 @@ static bool epd_get_glyph(char ch, uint8_t glyph[5])
     case '7': glyph[0] = 0x01; glyph[1] = 0x71; glyph[2] = 0x09; glyph[3] = 0x05; glyph[4] = 0x03; return true;
     case '8': glyph[0] = 0x36; glyph[1] = 0x49; glyph[2] = 0x49; glyph[3] = 0x49; glyph[4] = 0x36; return true;
     case '9': glyph[0] = 0x06; glyph[1] = 0x49; glyph[2] = 0x49; glyph[3] = 0x29; glyph[4] = 0x1E; return true;
-    case ' ': return true;
+    
+    // Special characters
+    case ' ': glyph[0] = 0x00; glyph[1] = 0x00; glyph[2] = 0x00; glyph[3] = 0x00; glyph[4] = 0x00; return true;
     case '-': glyph[0] = 0x08; glyph[1] = 0x08; glyph[2] = 0x08; glyph[3] = 0x08; glyph[4] = 0x08; return true;
     case '.': glyph[0] = 0x00; glyph[1] = 0x60; glyph[2] = 0x60; glyph[3] = 0x00; glyph[4] = 0x00; return true;
     case ',': glyph[0] = 0x00; glyph[1] = 0x40; glyph[2] = 0x20; glyph[3] = 0x00; glyph[4] = 0x00; return true;
     case '!': glyph[0] = 0x00; glyph[1] = 0x00; glyph[2] = 0x7D; glyph[3] = 0x00; glyph[4] = 0x00; return true;
     case '?': glyph[0] = 0x02; glyph[1] = 0x01; glyph[2] = 0x51; glyph[3] = 0x09; glyph[4] = 0x06; return true;
     case ':': glyph[0] = 0x00; glyph[1] = 0x36; glyph[2] = 0x36; glyph[3] = 0x00; glyph[4] = 0x00; return true;
+    case ';': glyph[0] = 0x00; glyph[1] = 0x36; glyph[2] = 0x1B; glyph[3] = 0x00; glyph[4] = 0x00; return true;
     case '/': glyph[0] = 0x60; glyph[1] = 0x10; glyph[2] = 0x08; glyph[3] = 0x04; glyph[4] = 0x03; return true;
+    case '\\': glyph[0] = 0x03; glyph[1] = 0x04; glyph[2] = 0x08; glyph[3] = 0x10; glyph[4] = 0x60; return true;
     case '+': glyph[0] = 0x08; glyph[1] = 0x08; glyph[2] = 0x3E; glyph[3] = 0x08; glyph[4] = 0x08; return true;
     case '>': glyph[0] = 0x41; glyph[1] = 0x22; glyph[2] = 0x14; glyph[3] = 0x08; glyph[4] = 0x00; return true;
     case '<': glyph[0] = 0x08; glyph[1] = 0x14; glyph[2] = 0x22; glyph[3] = 0x41; glyph[4] = 0x00; return true;
     case '(': glyph[0] = 0x00; glyph[1] = 0x1C; glyph[2] = 0x22; glyph[3] = 0x41; glyph[4] = 0x00; return true;
     case ')': glyph[0] = 0x00; glyph[1] = 0x41; glyph[2] = 0x22; glyph[3] = 0x1C; glyph[4] = 0x00; return true;
     case '_': glyph[0] = 0x40; glyph[1] = 0x40; glyph[2] = 0x40; glyph[3] = 0x40; glyph[4] = 0x40; return true;
-    case '\'': glyph[0] = 0x00; glyph[1] = 0x03; glyph[2] = 0x00; glyph[3] = 0x00; glyph[4] = 0x00; return true;
+    case '\'': glyph[0] = 0x00; glyph[1] = 0x02; glyph[2] = 0x00; glyph[3] = 0x00; glyph[4] = 0x00; return true;
+    case '"': glyph[0] = 0x03; glyph[1] = 0x00; glyph[2] = 0x03; glyph[3] = 0x00; glyph[4] = 0x00; return true;
     case '#': glyph[0] = 0x14; glyph[1] = 0x7F; glyph[2] = 0x14; glyph[3] = 0x7F; glyph[4] = 0x14; return true;
+    case '$': glyph[0] = 0x24; glyph[1] = 0x2A; glyph[2] = 0x7F; glyph[3] = 0x2A; glyph[4] = 0x12; return true;
+    case '%': glyph[0] = 0x43; glyph[1] = 0x33; glyph[2] = 0x08; glyph[3] = 0x66; glyph[4] = 0x62; return true;
+    case '&': glyph[0] = 0x30; glyph[1] = 0x4A; glyph[2] = 0x55; glyph[3] = 0x22; glyph[4] = 0x50; return true;
+    case '*': glyph[0] = 0x08; glyph[1] = 0x2A; glyph[2] = 0x1C; glyph[3] = 0x2A; glyph[4] = 0x08; return true;
+    case '=': glyph[0] = 0x14; glyph[1] = 0x14; glyph[2] = 0x14; glyph[3] = 0x14; glyph[4] = 0x14; return true;
+    case '[': glyph[0] = 0x00; glyph[1] = 0x3E; glyph[2] = 0x41; glyph[3] = 0x41; glyph[4] = 0x00; return true;
+    case ']': glyph[0] = 0x00; glyph[1] = 0x41; glyph[2] = 0x41; glyph[3] = 0x3E; glyph[4] = 0x00; return true;
+    case '{': glyph[0] = 0x08; glyph[1] = 0x36; glyph[2] = 0x41; glyph[3] = 0x41; glyph[4] = 0x00; return true;
+    case '}': glyph[0] = 0x00; glyph[1] = 0x41; glyph[2] = 0x41; glyph[3] = 0x36; glyph[4] = 0x08; return true;
+    case '|': glyph[0] = 0x00; glyph[1] = 0x7F; glyph[2] = 0x00; glyph[3] = 0x7F; glyph[4] = 0x00; return true;
+    case '~': glyph[0] = 0x04; glyph[1] = 0x02; glyph[2] = 0x04; glyph[3] = 0x02; glyph[4] = 0x04; return true;
+    case '`': glyph[0] = 0x00; glyph[1] = 0x01; glyph[2] = 0x02; glyph[3] = 0x00; glyph[4] = 0x00; return true;
+    case '@': glyph[0] = 0x3E; glyph[1] = 0x41; glyph[2] = 0x55; glyph[3] = 0x59; glyph[4] = 0x2E; return true;
+    case '^': glyph[0] = 0x04; glyph[1] = 0x02; glyph[2] = 0x01; glyph[3] = 0x02; glyph[4] = 0x04; return true;
+    
     default:
+        // Unknown character - show a question mark
         glyph[0] = 0x02; glyph[1] = 0x01; glyph[2] = 0x51; glyph[3] = 0x09; glyph[4] = 0x06;
         return false;
     }

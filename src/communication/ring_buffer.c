@@ -1,8 +1,6 @@
 #include "communication/ring_buffer.h"
 #include <string.h>
-#include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(ring_buffer, LOG_LEVEL_INF);
 
 void ring_buffer_init(ring_buffer_t *rb)
 {
@@ -29,7 +27,7 @@ bool ring_buffer_put(ring_buffer_t *rb, const meshtastic_FromRadio *msg)
     
     if (next == rb->read_idx) {
         rb->dropped_count++;
-        LOG_WRN("Ring buffer full, dropping message. Total dropped: %zu", rb->dropped_count);
+        printf("Ring buffer full, dropping message. Total dropped: %zu\n", rb->dropped_count);
         return false;
     }
     
