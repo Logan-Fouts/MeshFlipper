@@ -67,6 +67,7 @@ void update_message_history(struct messageHistory *mes_history, const meshtastic
 
     mes_history->messages[mes_history->count % MAX_MESSAGE_HISTORY] = parsed_message;
     mes_history->count++;
+    mes_history->newest_message = &mes_history->messages[(mes_history->count - 1) % MAX_MESSAGE_HISTORY];
 
 
     k_spin_unlock(&mes_history->lock, key);

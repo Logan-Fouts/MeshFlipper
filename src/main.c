@@ -299,7 +299,7 @@ int main(void)
         printk("MyNodeInfo not received yet; skipping startup test send.\n");
     }
 
-    print_my_node_info(&node_list.my_info);
+    // print_my_node_info(&node_list.my_info);
 
     // Periodically send want_config_id
     const int64_t want_config_interval_ms = 2LL * 60LL * 1000LL; // 2 minutes

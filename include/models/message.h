@@ -26,6 +26,7 @@ struct messageHistory {
     struct message messages[MAX_MESSAGE_HISTORY];
     size_t count;
     struct k_spinlock lock;
+    struct message *newest_message;
 };
 
 void update_message_history(struct messageHistory *mes_history, const meshtastic_FromRadio *msg_packet);

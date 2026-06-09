@@ -168,6 +168,11 @@ static bool copy_latest_received_message(struct messageHistory *message_history,
     size_t visible = count < MAX_MESSAGE_HISTORY ? count : MAX_MESSAGE_HISTORY;
 
     // Find the latest message that is not from my node and set it to the output parameter.
+    if (message_history->newest_message != NULL && message_history->newest_message->from != (int)my_node_num) {
+        *out = *(message_history->newest_message);
+        k_spin_unlock(&message_history->lock, key);
+        return true;
+    }
     for (size_t i = 0; i < visible; i++) {
         size_t index = (count - 1 - i) % MAX_MESSAGE_HISTORY;
         struct message candidate = message_history->messages[index];
