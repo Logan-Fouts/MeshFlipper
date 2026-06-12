@@ -17,6 +17,9 @@
 #include "cb_args.h"
 #include "ui/buttons.h"
 
+#define LED0_NODE DT_ALIAS(led0)
+
+static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 
 const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 static const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
@@ -87,6 +90,11 @@ int setup(struct button_state *buttons, int num_buttons)
         return 0;
     }
 
+    if (gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE) < 0) {
+        printk("Error: failed to configure LED GPIO pin\n");
+        return 0;
+    }
+
     return 1;
 }
 
@@ -140,6 +148,11 @@ void process_messages_task(void)
                     }
 
                     update_message_history(&message_history, &msg);
+                    for (int i = 0; i < 8; i++) {
+                        gpio_pin_toggle_dt(&led);
+                        k_msleep(50);
+                    }
+
                     int ret = screen_ui_refresh(&message_history, &node_list);
                     if (ret < 0) {
                         printk("EPD screen update failed: %d\n", ret);
@@ -204,6 +217,11 @@ int main(void)
     if (setup(buttons, ARRAY_SIZE(buttons)) == 0) {
         printk("Setup failed. Exiting.\n");
         return -1;
+    }
+
+    for (int i = 0; i < 15; i++) {
+        gpio_pin_toggle_dt(&led);
+        k_msleep(50);
     }
 
     int ui_ret = screen_ui_refresh(&message_history, &node_list);

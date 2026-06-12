@@ -1,3 +1,17 @@
+/ {
+	leds {
+		compatible = "gpio-leds";
+		led0: led_0 {
+			gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+				label = "LED 0";
+		};
+	};
+
+	aliases {
+		led0 = &led0;
+	};
+};
+
 &pinctrl {
 	uart0_default: uart0_default {
 		group1 {
