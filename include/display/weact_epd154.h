@@ -18,6 +18,7 @@ struct weact_epd154_thread_entry {
 struct weact_epd154_node_entry {
     uint32_t node_num;
     const char *label;
+    bool favorited;
 };
 
 int weact_epd154_init(void);

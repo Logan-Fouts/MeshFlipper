@@ -357,6 +357,7 @@ static void rebuild_node_picker_snapshot(const struct nodeHistory *node_history)
 
         g_node_snapshot[g_node_snapshot_count].node_num = n->num;
         g_node_snapshot[g_node_snapshot_count].label = label;
+        g_node_snapshot[g_node_snapshot_count].favorited = n->favorited;
         g_node_snapshot_last_heard[g_node_snapshot_count] = n->last_heard;
         g_node_snapshot_count++;
     }
@@ -365,11 +366,26 @@ static void rebuild_node_picker_snapshot(const struct nodeHistory *node_history)
 
     for (size_t i = 0; i + 1 < g_node_snapshot_count; i++) {
         for (size_t j = i + 1; j < g_node_snapshot_count; j++) {
-            if (g_node_snapshot_last_heard[j] > g_node_snapshot_last_heard[i]) {
+            bool should_swap = false;
+            
+            // Favorited always comes before non-favorited
+            if (g_node_snapshot[j].favorited && !g_node_snapshot[i].favorited) {
+                should_swap = true;
+            } 
+            // Both favorited OR both not favorited - compare by timestamp
+            else if (g_node_snapshot[j].favorited == g_node_snapshot[i].favorited) {
+                if (g_node_snapshot_last_heard[j] > g_node_snapshot_last_heard[i]) {
+                    should_swap = true;
+                }
+            }
+            
+            if (should_swap) {
+                // Swap timestamps
                 uint32_t tmp_heard = g_node_snapshot_last_heard[i];
                 g_node_snapshot_last_heard[i] = g_node_snapshot_last_heard[j];
                 g_node_snapshot_last_heard[j] = tmp_heard;
-
+                
+                // Swap nodes
                 struct weact_epd154_node_entry tmp_node = g_node_snapshot[i];
                 g_node_snapshot[i] = g_node_snapshot[j];
                 g_node_snapshot[j] = tmp_node;
