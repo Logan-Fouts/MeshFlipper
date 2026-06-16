@@ -13,6 +13,7 @@
 struct weact_epd154_thread_entry {
     const char *text;
     bool is_outgoing;
+    const char *sender_name;
 };
 
 struct weact_epd154_node_entry {

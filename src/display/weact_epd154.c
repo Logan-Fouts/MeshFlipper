@@ -1174,7 +1174,7 @@ int weact_epd154_show_thread_screen(const char *target_label,
                 int label_width = strlen("YOU") * 6;
                 epd_draw_text(x + bubble_width - label_width - 6, y + 2, 1, false, "YOU");
             } else {
-                epd_draw_text(x + 6, y + 2, 1, false, "THEM");
+                epd_draw_text(x + 6, y + 2, 1, false, entries[i].sender_name != NULL ? entries[i].sender_name : "THEM");
             }
             
             // Separator line (separates label from message text)

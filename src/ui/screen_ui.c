@@ -283,6 +283,7 @@ static int render_thread_screen(struct messageHistory *message_history, struct n
         const struct message *msg = &g_thread_snapshot[start + i];
         window[i].text = msg->text;
         window[i].is_outgoing = ((uint32_t)msg->from == my_node_num);
+        window[i].sender_name = msg->from == 0 ? "Unknown" : resolve_sender_name(node_history, msg->from, target_label, sizeof(target_label));
     }
 
     size_t selected_visible = g_ui_state.thread_message_index - start;
