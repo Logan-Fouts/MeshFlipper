@@ -1,0 +1,1192 @@
+=== ./comms/protobuf_handler.c ===
+#include <zephyr/kernel.h>
+#include "comms/protobuf_handler.h"
+#include "comms/uart_comms.h"
+#include <pb_encode.h>
+#include <pb_decode.h>
+#include <string.h>
+#include <errno.h>
+
+// Decodes a complete Meshtastic frame payload using nanopb.
+meshtastic_FromRadio *decode_from_radio(const uint8_t *payload, size_t len)
+{
+    // Keep the decoded message in static storage because the caller uses the pointer after this function returns.
+    static meshtastic_FromRadio msg;
+    memset(&msg, 0, sizeof(msg));
+    pb_istream_t stream = pb_istream_from_buffer(payload, len);
+
+    // Decode the payload into the FromRadio message struct. If decoding fails, print an error and return.
+    if (!pb_decode(&stream, meshtastic_FromRadio_fields, &msg)) {
+        printk("FromRadio decode failed: %s\n", PB_GET_ERROR(&stream));
+        return NULL;
+    }
+
+    return &msg;
+} 
+
+int send_meshtastic_frame(const uint8_t *payload, size_t payload_len)
+{
+    // Use the global UART comms instance
+    return uart_comms_send_frame(&g_uart_comms, payload, payload_len);
+}
+
+int send_want_config(void)
+{
+    meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
+    msg.which_payload_variant = meshtastic_ToRadio_want_config_id_tag;
+    msg.want_config_id = 1;
+
+    uint8_t buf[meshtastic_ToRadio_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
+
+    if (!pb_encode(&stream, meshtastic_ToRadio_fields, &msg)) {
+        printk("ToRadio encode failed: %s\n", PB_GET_ERROR(&stream));
+        return -EIO;
+    }
+
+    return send_meshtastic_frame(buf, stream.bytes_written);
+}
+
+int send_text_message(uint32_t target_node, const char *text, size_t text_len)
+{
+    // Build and send a text message
+    meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
+    msg.which_payload_variant = meshtastic_ToRadio_packet_tag;
+    msg.packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+    msg.packet.id = 0;  // Let radio assign
+    msg.packet.from = 0;
+    msg.packet.to = target_node;
+    msg.packet.want_ack = true;
+    msg.packet.priority = meshtastic_MeshPacket_Priority_RELIABLE;
+    msg.packet.decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+    msg.packet.decoded.want_response = false;
+    
+    if (text_len > sizeof(msg.packet.decoded.payload.bytes)) {
+        printk("Message too long!\n");
+        return -EMSGSIZE;
+    }
+    
+    memcpy(msg.packet.decoded.payload.bytes, text, text_len);
+    msg.packet.decoded.payload.size = text_len;
+    
+    uint8_t buf[meshtastic_ToRadio_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
+    
+    if (!pb_encode(&stream, meshtastic_ToRadio_fields, &msg)) {
+        printk("ToRadio encode failed: %s\n", PB_GET_ERROR(&stream));
+        return -EIO;
+    }
+    
+    return send_meshtastic_frame(buf, stream.bytes_written);
+}=== ./comms/uart_comms.c ===
+#include "comms/uart_comms.h"
+#include "comms/protobuf_handler.h"
+#include "models/ring_buffer.h"
+#include <string.h>
+#include <errno.h>
+#include <zephyr/kernel.h>
+
+#define MESHTASTIC_START1 0x94
+#define MESHTASTIC_START2 0xC3
+#define RX_FRAME_MAX 512
+
+// Define the global instance
+uart_comms_t g_uart_comms = {
+    .hal = NULL,
+    .rx_state = RX_WAIT_START1,
+    .rx_pos = 0,
+    .rx_expected_len = 0,
+    .initialized = false,
+    .stats = {0}
+};
+
+extern ring_buffer_t g_msg_ring_buffer;
+
+int uart_comms_init(uart_comms_t *comms, uart_hal_t *hal)
+{
+    if (!comms || !hal) return -EINVAL;
+    
+    comms->hal = hal;
+    comms->rx_state = RX_WAIT_START1;
+    comms->rx_pos = 0;
+    comms->rx_expected_len = 0;
+    comms->initialized = true;
+    memset(&comms->stats, 0, sizeof(comms->stats));
+    
+    return 0;
+}
+
+void uart_comms_reset(uart_comms_t *comms)
+{
+    if (comms) {
+        comms->rx_state = RX_WAIT_START1;
+        comms->rx_pos = 0;
+        comms->rx_expected_len = 0;
+    }
+}
+
+static meshtastic_FromRadio *rx_consume_byte(uart_comms_t *comms, uint8_t c)
+{
+    if (!comms) return NULL;
+    
+    switch (comms->rx_state) {
+        case RX_WAIT_START1:
+            if (c == MESHTASTIC_START1) {
+                comms->rx_frame[0] = c;
+                comms->rx_pos = 1;
+                comms->rx_state = RX_WAIT_START2;
+            }
+            break;
+        
+        case RX_WAIT_START2:
+            if (c == MESHTASTIC_START2) {
+                comms->rx_frame[comms->rx_pos++] = c;
+                comms->rx_state = RX_WAIT_LEN_MSB;
+            } else if (c == MESHTASTIC_START1) {
+                comms->rx_frame[0] = c;
+                comms->rx_pos = 1;
+            } else {
+                uart_comms_reset(comms);
+            }
+            break;
+        
+        case RX_WAIT_LEN_MSB:
+            comms->rx_frame[comms->rx_pos++] = c;
+            comms->rx_expected_len = ((size_t)c) << 8;
+            comms->rx_state = RX_WAIT_LEN_LSB;
+            break;
+
+        case RX_WAIT_LEN_LSB:
+            comms->rx_frame[comms->rx_pos++] = c;
+            comms->rx_expected_len |= c;
+
+            if (comms->rx_expected_len == 0 || comms->rx_expected_len > RX_FRAME_MAX) {
+                printk("Invalid Meshtastic frame length: %u\n", (unsigned int)comms->rx_expected_len);
+                uart_comms_reset(comms);
+                break;
+            }
+
+            comms->rx_pos = 4;
+            comms->rx_state = RX_READ_PAYLOAD;
+            break;
+
+        case RX_READ_PAYLOAD:
+            comms->rx_frame[comms->rx_pos++] = c;
+
+            if ((comms->rx_pos - 4) >= comms->rx_expected_len) {
+                meshtastic_FromRadio *msg = decode_from_radio(&comms->rx_frame[4], comms->rx_expected_len);
+                uart_comms_reset(comms);
+                return msg;
+            }
+            break;
+    }
+    return NULL;
+}
+
+int uart_comms_send_frame(uart_comms_t *comms, const uint8_t *payload, size_t payload_len)
+{
+    if (!comms || !comms->initialized || !payload) return -EINVAL;
+    if (payload_len == 0 || payload_len > RX_FRAME_MAX) return -EINVAL;
+    
+    uint8_t header[4] = {
+        MESHTASTIC_START1,
+        MESHTASTIC_START2,
+        (uint8_t)((payload_len >> 8) & 0xFF),
+        (uint8_t)(payload_len & 0xFF)
+    };
+    
+    int ret = uart_hal_send_bytes(comms->hal, header, sizeof(header));
+    if (ret != 0) return ret;
+    
+    return uart_hal_send_bytes(comms->hal, payload, payload_len);
+}
+
+// ===============================
+// MAIN BYTE PROCESSING FUNCTION 
+// ===============================
+
+void uart_comms_process_byte(uint8_t byte, void *context)
+{
+    uart_comms_t *comms = (uart_comms_t*)context;
+    if (!comms || !comms->initialized) return;
+    
+    // Start timing for ISR performance monitoring
+    uint32_t start_cycles = k_cycle_get_32();
+    
+    // Update statistics
+    comms->stats.bytes_processed++;
+    
+    // Check for buffer overflow in RX state
+    if (comms->rx_state == RX_READ_PAYLOAD && comms->rx_pos >= sizeof(comms->rx_frame)) {
+        comms->stats.frames_dropped++;
+        uart_comms_reset(comms);
+        return;
+    }
+    
+    // Process the byte through state machine
+    meshtastic_FromRadio *msg = rx_consume_byte(comms, byte);
+    if (msg == NULL) {
+        return;
+    }
+    
+    // Frame received successfully
+    comms->stats.frames_received++;
+    
+    // Add to ring buffer (this handles the copy and semaphore)
+    if (!ring_buffer_put(&g_msg_ring_buffer, msg)) {
+        comms->stats.frames_dropped++;
+        printk("WARNING: Ring buffer full - dropping frame\n");
+    }
+    
+    // Performance monitoring - check how long processing took
+    uint32_t end_cycles = k_cycle_get_32();
+    uint32_t cycles_taken = end_cycles - start_cycles;
+    uint32_t freq = sys_clock_hw_cycles_per_sec();
+    uint32_t duration_us = (cycles_taken * 1000000) / freq;
+    
+    // Warn if ISR took too long (> 100 microseconds)
+    if (duration_us > 100) {
+        printk("WARNING: UART ISR took %u us!\n", duration_us);
+    }
+}
+
+// ============================================================
+// STATISTICS AND UTILITY FUNCTIONS
+// ============================================================
+
+size_t uart_comms_get_frames_received(uart_comms_t *comms)
+{
+    return comms ? comms->stats.frames_received : 0;
+}
+
+size_t uart_comms_get_frames_dropped(uart_comms_t *comms)
+{
+    return comms ? comms->stats.frames_dropped : 0;
+}
+
+size_t uart_comms_get_bytes_processed(uart_comms_t *comms)
+{
+    return comms ? comms->stats.bytes_processed : 0;
+}
+
+void uart_comms_reset_stats(uart_comms_t *comms)
+{
+    if (comms) {
+        memset(&comms->stats, 0, sizeof(comms->stats));
+    }
+}=== ./hardware/uart_hal.c ===
+#include "hardware/uart_hal.h"
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/uart.h>
+#include <string.h>
+#include <errno.h>
+
+// Global UART HAL instance
+uart_hal_t g_uart_hal = {
+    .dev = NULL,
+    .initialized = false,
+    .rx_callback = NULL,
+    .callback_context = NULL
+};
+
+int uart_hal_init(uart_hal_t *hal, const struct device *dev)
+{
+    if (!hal || !dev) return -EINVAL;
+    if (!device_is_ready(dev)) {
+        printk("UART device not ready\n");
+        return -ENODEV;
+    }
+    
+    hal->dev = dev;
+    hal->initialized = true;
+    
+    // Set default config
+    hal->config.baud_rate = 115200;
+    hal->config.data_bits = 8;
+    hal->config.stop_bits = 1;
+    hal->config.parity = 0;
+    
+    return 0;
+}
+
+int uart_hal_configure(uart_hal_t *hal, const uart_config_t *config)
+{
+    if (!hal || !hal->initialized) return -EINVAL;
+    if (!config) return -EINVAL;
+    
+    // ==========================
+    // ZEPHYR UART CONFIGURATION
+    // ==========================
+    
+    // 1. Build Zephyr UART configuration structure
+    struct uart_config uart_cfg = {
+        .baudrate = config->baud_rate,
+        .data_bits = config->data_bits,
+        .stop_bits = config->stop_bits,
+        .parity = config->parity,
+        .flow_ctrl = config->flow_ctrl,
+    };
+    
+    // 2. Apply configuration to the hardware using Zephyr API
+    int ret = uart_configure(hal->dev, &uart_cfg);
+    if (ret != 0) {
+        printk("Failed to configure UART: %d\n", ret);
+        return ret;
+    }
+    
+    // 3. Store config
+    hal->config = *config;
+    
+    return 0;
+}
+
+int uart_hal_configure_default(uart_hal_t *hal)
+{
+    uart_config_t config = {
+        .baud_rate = 115200,
+        .data_bits = UART_CFG_DATA_BITS_8,
+        .stop_bits = UART_CFG_STOP_BITS_1,
+        .parity = UART_CFG_PARITY_NONE,
+        .flow_ctrl = UART_CFG_FLOW_CTRL_NONE,
+    };
+    return uart_hal_configure(hal, &config);
+}
+
+void uart_hal_set_rx_callback(uart_hal_t *hal, 
+                              void (*callback)(uint8_t byte, void *context), 
+                              void *context)
+{
+    if (hal) {
+        hal->rx_callback = callback;
+        hal->callback_context = context;
+    }
+}
+
+int uart_hal_send_byte(uart_hal_t *hal, uint8_t byte)
+{
+    if (!hal || !hal->initialized || !hal->dev) return -EINVAL;
+    uart_poll_out(hal->dev, byte);
+    return 0;
+}
+
+int uart_hal_send_bytes(uart_hal_t *hal, const uint8_t *data, size_t len)
+{
+    if (!hal || !hal->initialized || !hal->dev || !data) return -EINVAL;
+    
+    for (size_t i = 0; i < len; i++) {
+        uart_poll_out(hal->dev, data[i]);
+    }
+    return 0;
+}
+
+void uart_hal_irq_enable(uart_hal_t *hal)
+{
+    if (hal && hal->initialized && hal->dev) {
+        uart_irq_rx_enable(hal->dev);
+    }
+}
+
+void uart_hal_irq_disable(uart_hal_t *hal)
+{
+    if (hal && hal->initialized && hal->dev) {
+        uart_irq_rx_disable(hal->dev);
+    }
+}
+
+// ISR Handler - routes bytes to callback
+void uart_hal_isr_handler(const struct device *dev, void *user_data)
+{
+    uart_hal_t *hal = &g_uart_hal;  // Use global instance
+    if (!hal->initialized || !hal->rx_callback) return;
+    
+    uart_irq_update(dev);
+    
+    while (uart_irq_rx_ready(dev)) {
+        uint8_t byte;
+        int recv = uart_fifo_read(dev, &byte, 1);
+        if (recv <= 0) break;
+        
+        // Pass to callback
+        hal->rx_callback(byte, hal->callback_context);
+    }
+}=== ./main.c ===
+#include <stdio.h>
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/uart.h>
+
+#include "hardware/uart_hal.h"
+#include "comms/uart_comms.h"
+#include "models/ring_buffer.h"
+#include "models/mesh_message.h"
+#include "models/mesh_node.h"
+#include "tasks/message_processor.h"
+#include "comms/protobuf_handler.h"
+
+// ==================
+// GLOBAL INSTANCES
+// ==================
+
+struct messageHistory g_message_history = { .count = 0 };
+struct nodeHistory g_node_list = { .count = 0 };
+ring_buffer_t g_msg_ring_buffer;
+
+// ==================
+// SETUP FUNCTIONS
+// ==================
+
+static int setup_uart_hal(void) 
+{
+    const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
+
+    if (uart_hal_init(&g_uart_hal, uart_dev) != 0) {
+        printk("UART HAL init failed\n");
+        return -1;
+    }
+
+    if (uart_hal_configure_default(&g_uart_hal) != 0) {
+        printk("UART configure failed\n");
+        return -1;
+    }
+
+    // Set UART callback to HAL's ISR handler
+    uart_irq_callback_user_data_set(uart_dev, uart_hal_isr_handler, &g_uart_hal);
+
+    uart_irq_rx_enable(uart_dev);
+
+    // Set the HAL callback to forward to uart_comms
+    uart_hal_set_rx_callback(&g_uart_hal, uart_comms_process_byte, &g_uart_comms);
+    
+    // // Enable interrupts
+    uart_hal_irq_enable(&g_uart_hal);
+    
+    printk("UART HAL initialized\n");
+    return 0;
+}
+
+static int setup_message_processor(void) 
+{
+    if (message_processor_init(&g_msg_ring_buffer, 
+                               &g_message_history, 
+                               &g_node_list) != 0) {
+        printk("Message processor init failed\n");
+        return -1;
+    } 
+
+    if (message_processor_start() != 0) {
+        printk("Message processor start failed\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int setup(void) 
+{
+    // Initialize ring buffer
+    ring_buffer_init(&g_msg_ring_buffer);
+    printk("Ring buffer initialized\n");
+
+    if (setup_uart_hal() != 0) {
+        return -1;
+    }
+
+    if (setup_message_processor() != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+// ========
+// MAIN
+// ========
+
+int main(void)
+{
+    printk("Starting MeshFlipper...\n");
+    
+    if (setup() != 0) {
+        printk("Setup failed\n");
+        return -1;
+    }
+
+    printk("MeshFlipper ready!\n");
+    
+    // Give some time for UART to stabilize
+    k_sleep(K_SECONDS(1));
+    
+    // Wait for my node info (non-blocking, runs in background)
+    bool got_info = message_processor_wait_for_my_node_info(30000);
+    
+    if (got_info) {
+        printk("✅ My node info received!\n");
+        print_my_node_info(&g_node_list.my_info);
+    } else {
+        printk("❌ Failed to get my node info\n");
+    }
+    
+    // Main loop
+    while (1) {
+        k_sleep(K_SECONDS(5));
+        print_my_node_info(&g_node_list.my_info);
+    }
+    
+    return 0;
+}=== ./models/mesh_message.c ===
+#include <zephyr/kernel.h>
+#include "models/mesh_message.h"
+
+
+struct message parse_message(const meshtastic_FromRadio *msg_packet)
+{
+    struct message msg = {
+        .id = 0,
+        .from = 0,
+        .to = 0,
+        .text = {0},
+    };
+
+    if (msg_packet != NULL) {
+        msg.id = msg_packet->packet.id;
+        msg.from = msg_packet->packet.from;
+        msg.to = msg_packet->packet.to;
+
+        size_t copy_len = msg_packet->packet.decoded.payload.size;
+
+        // This should never happen since the Meshtastic radio should enforce the max message length, but we check just in case to avoid buffer overflows.
+        if (copy_len >= sizeof(msg.text)) {
+            copy_len = sizeof(msg.text) - 1;
+        }
+
+        memcpy(msg.text, msg_packet->packet.decoded.payload.bytes, copy_len);
+        msg.text[copy_len] = '\0';
+    }
+
+    return msg;
+}
+
+void print_message(struct message *msg)
+{
+    if (msg == NULL) {
+        printk("\n[Message]\n  <null>\n");
+        return;
+    }
+
+    printk("\n[Message]\n");
+    printk("  id:            %d\n", msg->id);
+    printk("  sender:        %d\n", msg->from);
+    printk("  destination:   %d\n", msg->to);
+    printk("  text:          %s\n", msg->text);
+}
+
+void update_message_history(struct messageHistory *mes_history, const meshtastic_FromRadio *msg_packet)
+{
+    if (mes_history == NULL || msg_packet == NULL) {
+        return;
+    }
+
+    struct message parsed_message = parse_message(msg_packet);
+
+    if (parsed_message.id == 0) {
+        return;
+    }
+
+    k_spinlock_key_t key = k_spin_lock(&mes_history->lock);
+
+    // Check for duplicates before adding to history
+    if (find_message_by_id(mes_history, parsed_message.id) != NULL) {
+        k_spin_unlock(&mes_history->lock, key);
+        return;
+    }
+
+    mes_history->messages[mes_history->count % MAX_MESSAGE_HISTORY] = parsed_message;
+    mes_history->count++;
+    mes_history->newest_message = &mes_history->messages[(mes_history->count - 1) % MAX_MESSAGE_HISTORY];
+
+
+    k_spin_unlock(&mes_history->lock, key);
+}
+
+
+// Returns a dynamically allocated array of pointers to messages sent to the specified node, and sets out_count to the number of messages found.
+struct message** find_my_messages_sent_to_node(struct messageHistory *mes_history, int node_num, size_t *out_count)
+{
+    if (mes_history == NULL || mes_history->count == 0 || out_count == NULL) {
+        if (out_count != NULL) {
+            *out_count = 0;
+        }
+        return NULL;
+    }
+
+    struct message **results = k_malloc(sizeof(struct message *) * mes_history->count);
+    size_t results_count = 0;
+
+    for (int i = 0; i < mes_history->count && results_count < mes_history->count; i++) {
+        struct message *msg_ptr;
+
+        //Breifly aquire lock before accessing specific mesage from history
+        k_spinlock_key_t key = k_spin_lock(&mes_history->lock);
+        msg_ptr = &mes_history->messages[i];
+        k_spin_unlock(&mes_history->lock, key);
+
+        if (msg_ptr->to == node_num) {
+            results[results_count++] = msg_ptr;
+        }
+    }
+
+    *out_count = results_count;
+    return results;
+}
+
+struct message* find_message_by_id(struct messageHistory *mes_history, int id)
+{
+    if (mes_history == NULL || mes_history->count == 0) {
+        return NULL;
+    }
+
+    for (int i = 0; i < mes_history->count; i++) {
+        struct message *msg_ptr;
+
+        //Breifly aquire lock before accessing specific mesage from history
+        k_spinlock_key_t key = k_spin_lock(&mes_history->lock);
+        msg_ptr = &mes_history->messages[i];
+        k_spin_unlock(&mes_history->lock, key);
+
+        if (msg_ptr->id == id) {
+            return msg_ptr;
+        }
+    }
+
+    return NULL;
+}
+
+void print_message_history(struct messageHistory *mes_history)
+{
+    if (mes_history->count == 0) {
+        return;
+    }
+
+    for (int i = 0; i < mes_history->count; i++) {
+        struct message msg_copy;
+
+        //Breifly aquire lock before accessing specific mesage from history
+        k_spinlock_key_t key = k_spin_lock(&mes_history->lock);
+        msg_copy = mes_history->messages[i];
+        k_spin_unlock(&mes_history->lock, key);
+
+        print_message(&msg_copy);
+    }
+}
+
+
+=== ./models/mesh_node.c ===
+#include <stdio.h>
+#include <string.h>
+#include <zephyr/kernel.h>
+
+#include "models/mesh_node.h"
+
+// Helper function to safely copy strings from protobuf fields, ensuring null-termination and preventing buffer overflows.
+static void copy_proto_string(char *dest, size_t dest_size, const char *src)
+{
+    if (dest == NULL || dest_size == 0) {
+        return;
+    }
+
+    if (src == NULL) {
+        dest[0] = '\0';
+        return;
+    }
+
+    strncpy(dest, src, dest_size - 1);
+    dest[dest_size - 1] = '\0';
+}
+
+static int find_node_index_by_num(const struct nodeHistory *node_history, uint32_t node_num)
+{
+    size_t limit = node_history->count;
+
+    if (limit > MAX_NODE_HISTORY) {
+        limit = MAX_NODE_HISTORY;
+    }
+
+    for (size_t i = 0; i < limit; i++) {
+        if (node_history->nodes[i].valid && node_history->nodes[i].num == node_num) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+struct node_info parse_node(const meshtastic_FromRadio *node_packet)
+{
+    struct node_info n = {0};
+
+    if (node_packet != NULL) {
+        if (node_packet->which_payload_variant == meshtastic_FromRadio_node_info_tag) { // This is the typical node info packet we get for other nodes in the mesh.
+            n.valid = true;
+            n.num = node_packet->node_info.num;
+            n.last_heard = node_packet->node_info.last_heard;
+            n.snr = node_packet->node_info.snr;
+            n.has_hops_away = node_packet->node_info.has_hops_away;
+            n.hops_away = node_packet->node_info.hops_away;
+            n.via_mqtt = node_packet->node_info.via_mqtt;
+            n.favorited = node_packet->node_info.is_favorite;
+
+            if (node_packet->node_info.has_user) { // This has_user is a nanopb thing that indicates whether the optional user field is present in the protobuf message.
+                copy_proto_string(n.user_id, sizeof(n.user_id), node_packet->node_info.user.id);
+                copy_proto_string(n.long_name, sizeof(n.long_name), node_packet->node_info.user.long_name);
+                copy_proto_string(n.short_name, sizeof(n.short_name), node_packet->node_info.user.short_name);
+            }
+        } else if (node_packet->which_payload_variant == meshtastic_FromRadio_my_info_tag) { // This is the packet we get that contains info about our own node.
+            n.valid = true;
+            n.is_my_info = true;
+            n.num = node_packet->my_info.my_node_num;
+            n.reboot_count = node_packet->my_info.reboot_count;
+            n.nodedb_count = node_packet->my_info.nodedb_count;
+            n.device_id_len = node_packet->my_info.device_id.size;
+        }
+    }
+
+    return n;
+}
+
+void update_node_history(struct nodeHistory *node_history, const meshtastic_FromRadio *msg)
+{
+    if (node_history == NULL || msg == NULL) {
+        return;
+    }
+
+    k_spinlock_key_t key = k_spin_lock(&node_history->lock);
+
+    if (msg->which_payload_variant == meshtastic_FromRadio_my_info_tag) {
+        size_t device_id_len = msg->my_info.device_id.size;
+
+        if (device_id_len > sizeof(node_history->my_info.device_id)) {
+            device_id_len = sizeof(node_history->my_info.device_id);
+        }
+
+        node_history->my_info.valid = true;
+        node_history->my_info.num = msg->my_info.my_node_num;
+        node_history->my_info.reboot_count = msg->my_info.reboot_count;
+        node_history->my_info.nodedb_count = msg->my_info.nodedb_count;
+        node_history->my_info.device_id_len = device_id_len;
+        memset(node_history->my_info.device_id, 0, sizeof(node_history->my_info.device_id));
+        memcpy(node_history->my_info.device_id, msg->my_info.device_id.bytes, device_id_len);
+        copy_proto_string(node_history->my_info.pio_env, sizeof(node_history->my_info.pio_env), msg->my_info.pio_env);
+        k_spin_unlock(&node_history->lock, key);
+        return;
+    }
+
+    if (msg->which_payload_variant == meshtastic_FromRadio_node_info_tag) {
+        struct node_info parsed_node = parse_node(msg);
+        int existing_index;
+
+        if (!parsed_node.valid) {
+            k_spin_unlock(&node_history->lock, key);
+            return;
+        }
+
+        existing_index = find_node_index_by_num(node_history, parsed_node.num);
+        if (existing_index >= 0) {
+            node_history->nodes[existing_index] = parsed_node;
+        } else if (node_history->count < MAX_NODE_HISTORY) {
+            node_history->nodes[node_history->count++] = parsed_node;
+        }
+    }
+
+    k_spin_unlock(&node_history->lock, key);
+}
+
+void print_node(struct node_info *n)
+{
+    if (n == NULL) {
+        printk("\n[Node]\n  <null>\n");
+        return;
+    }
+
+    printk("\n[Node]\n");
+    printk("  num:           %u\n", (unsigned int)n->num);
+    if (n->short_name[0] != '\0') {
+        printk("  short_name:    %s\n", n->short_name);
+    }
+    if (n->long_name[0] != '\0') {
+        printk("  long_name:     %s\n", n->long_name);
+    }
+    if (n->user_id[0] != '\0') {
+        printk("  user_id:       %s\n", n->user_id);
+    }
+    printk("  last_heard:    %u\n", (unsigned int)n->last_heard);
+    printk("  snr:           %d.%02d\n", (int)n->snr, (int)((n->snr < 0 ? -n->snr : n->snr) * 100.0f) % 100);
+    if (n->has_hops_away) {
+        printk("  hops_away:     %u\n", (unsigned int)n->hops_away);
+    }
+    printk("  via_mqtt:      %s\n", n->via_mqtt ? "true" : "false");
+    printk("  favorited:     %s\n", n->favorited ? "true" : "false");
+}
+
+void print_my_node_info(const struct node_info *info)
+{
+    if (info == NULL || !info->valid) {
+        printk("\n[MyNodeInfo]\n  <not received>\n");
+        return;
+    }
+
+    printk("\n[MyNodeInfo]\n");
+    printk("  node_num:      %u\n", (unsigned int)info->num);
+    printk("  reboot_count:  %u\n", (unsigned int)info->reboot_count);
+    printk("  nodedb_count:  %u\n", (unsigned int)info->nodedb_count);
+    if (info->pio_env[0] != '\0') {
+        printk("  pio_env:       %s\n", info->pio_env);
+    }
+
+    printk("  device_id:     ");
+    for (size_t i = 0; i < info->device_id_len; i++) {
+        printk("%02x", info->device_id[i]);
+    }
+    printk("\n");
+}
+
+
+void print_node_history(struct nodeHistory *node_history)
+{
+    size_t count;
+
+    if (node_history == NULL) {
+        return;
+    }
+
+    k_spinlock_key_t count_key = k_spin_lock(&node_history->lock);
+    count = node_history->count;
+    k_spin_unlock(&node_history->lock, count_key);
+
+    if (count > MAX_NODE_HISTORY) {
+        count = MAX_NODE_HISTORY;
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    printk("\n=== Node History (total %zu nodes) ===\n", count);
+
+    for (size_t i = 0; i < count; i++) {
+        struct node_info node_copy;
+
+        //Breifly aquire lock before accessing specific node from history
+        k_spinlock_key_t key = k_spin_lock(&node_history->lock);
+        node_copy = node_history->nodes[i];
+        k_spin_unlock(&node_history->lock, key);
+
+        print_node(&node_copy);
+    }
+}
+
+void print_node_history_brief(struct nodeHistory *node_history)
+{
+    size_t count;
+
+    if (node_history == NULL) {
+        return;
+    }
+
+    k_spinlock_key_t count_key = k_spin_lock(&node_history->lock);
+    count = node_history->count;
+    k_spin_unlock(&node_history->lock, count_key);
+
+    if (count > MAX_NODE_HISTORY) {
+        count = MAX_NODE_HISTORY;
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        struct node_info node_copy;
+
+        //Breifly aquire lock before accessing specific node from history
+        k_spinlock_key_t key = k_spin_lock(&node_history->lock);
+        node_copy = node_history->nodes[i];
+        k_spin_unlock(&node_history->lock, key);
+
+        printk("[Node %zu]\n", i);
+        if (node_copy.short_name[0] != '\0') {
+            printk("  short_name, longname:    %s, %s\n", node_copy.short_name, node_copy.long_name);
+        }
+    }
+}=== ./models/ring_buffer.c ===
+#include "models/ring_buffer.h"
+#include <string.h>
+
+
+void ring_buffer_init(ring_buffer_t *rb)
+{
+    if (rb == NULL) {
+        return;
+    }
+    
+    memset(rb->buffer, 0, sizeof(rb->buffer));
+    rb->write_idx = 0;
+    rb->read_idx = 0;
+    rb->dropped_count = 0;
+    
+    // Initialize semaphore with 0 initial count, max count = RING_BUFFER_SIZE
+    k_sem_init(&rb->semaphore, 0, RING_BUFFER_SIZE);
+}
+
+bool ring_buffer_put(ring_buffer_t *rb, const meshtastic_FromRadio *msg)
+{
+    if (rb == NULL || msg == NULL) {
+        return false;
+    }
+    
+    int next = (rb->write_idx + 1) % RING_BUFFER_SIZE;
+    
+    if (next == rb->read_idx) {
+        rb->dropped_count++;
+        printf("Ring buffer full, dropping message. Total dropped: %zu\n", rb->dropped_count);
+        return false;
+    }
+    
+    // Copy message into buffer
+    memcpy(&rb->buffer[rb->write_idx], msg, sizeof(meshtastic_FromRadio));
+    
+    // Update write index
+    rb->write_idx = next;
+    
+    // Signal that a new message is available
+    k_sem_give(&rb->semaphore);
+    
+    return true;
+}
+
+bool ring_buffer_get(ring_buffer_t *rb, meshtastic_FromRadio *msg)
+{
+    if (rb == NULL || msg == NULL) {
+        return false;
+    }
+    
+    if (rb->read_idx == rb->write_idx) {
+        return false;
+    }
+    
+    // Copy message from buffer
+    memcpy(msg, &rb->buffer[rb->read_idx], sizeof(meshtastic_FromRadio));
+    
+    // Update read index
+    rb->read_idx = (rb->read_idx + 1) % RING_BUFFER_SIZE;
+    
+    return true;
+}
+
+bool ring_buffer_is_empty(const ring_buffer_t *rb)
+{
+    if (rb == NULL) {
+        return true;
+    }
+    return (rb->read_idx == rb->write_idx);
+}
+
+bool ring_buffer_is_full(const ring_buffer_t *rb)
+{
+    if (rb == NULL) {
+        return false;
+    }
+    int next = (rb->write_idx + 1) % RING_BUFFER_SIZE;
+    return (next == rb->read_idx);
+}
+
+size_t ring_buffer_available(const ring_buffer_t *rb)
+{
+    if (rb == NULL) {
+        return 0;
+    }
+    
+    if (rb->write_idx >= rb->read_idx) {
+        return rb->write_idx - rb->read_idx;
+    } else {
+        return RING_BUFFER_SIZE - (rb->read_idx - rb->write_idx);
+    }
+}
+
+size_t ring_buffer_get_dropped(ring_buffer_t *rb)
+{
+    if (rb == NULL) {
+        return 0;
+    }
+    return rb->dropped_count;
+}
+
+void ring_buffer_reset_dropped(ring_buffer_t *rb)
+{
+    if (rb == NULL) {
+        return;
+    }
+    rb->dropped_count = 0;
+}
+
+bool ring_buffer_wait(ring_buffer_t *rb, k_timeout_t timeout)
+{
+    if (rb == NULL) {
+        return false;
+    }
+    return (k_sem_take(&rb->semaphore, timeout) == 0);
+}=== ./tasks/message_processor.c ===
+#include "tasks/message_processor.h"
+#include "models/mesh_message.h"
+#include "models/mesh_node.h"
+#include "models/ring_buffer.h"
+#include "comms/protobuf_handler.h"
+#include "hardware/hardware.h"
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
+#include <string.h>
+#include <errno.h>
+
+// =============
+// STATIC DATA
+// =============
+
+static ring_buffer_t *g_rx_queue = NULL;
+static struct messageHistory *g_message_history = NULL;
+static struct nodeHistory *g_node_list = NULL;
+
+#define MSG_TASK_STACK_SIZE 4096
+K_THREAD_STACK_DEFINE(g_msg_task_stack, MSG_TASK_STACK_SIZE);
+static struct k_thread g_msg_task_thread;
+
+static struct {
+    uint32_t messages_processed;
+    uint32_t errors;
+    uint32_t ui_updates;
+} g_stats = {0};
+
+// ==================
+// STATIC FUNCTIONS
+// ==================
+
+static void process_message(const meshtastic_FromRadio *msg)
+{
+    if (!msg) return;
+    
+    // Handle queue status messages
+    if (msg->which_payload_variant == meshtastic_FromRadio_queueStatus_tag) {
+        printk("QueueStatus: res=%d free=%u/%u mesh_packet_id=%u\n",
+               (int)msg->queueStatus.res,
+               (unsigned int)msg->queueStatus.free,
+               (unsigned int)msg->queueStatus.maxlen,
+               (unsigned int)msg->queueStatus.mesh_packet_id);
+        return;
+    }
+    
+    // Handle node info updates
+    if (msg->which_payload_variant == meshtastic_FromRadio_my_info_tag ||
+        msg->which_payload_variant == meshtastic_FromRadio_node_info_tag) {
+        update_node_history(g_node_list, msg);
+        return;
+    }
+    
+    // Handle text messages
+    if (msg->which_payload_variant == meshtastic_FromRadio_packet_tag &&
+        msg->packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+        msg->packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
+        
+        if (g_node_list->my_info.valid && 
+            msg->packet.from == g_node_list->my_info.num) {
+            return;
+        }
+        
+        update_message_history(g_message_history, msg);
+        g_stats.messages_processed++;
+    }
+}
+
+// ================
+// PUBLIC FUNCTIONS
+// ================
+
+int message_processor_init(ring_buffer_t *rx_queue,
+                          struct messageHistory *message_history,
+                          struct nodeHistory *node_list)
+{
+    if (!rx_queue || !message_history || !node_list) {
+        return -EINVAL;
+    }
+    
+    g_rx_queue = rx_queue;
+    g_message_history = message_history;
+    g_node_list = node_list;
+    memset(&g_stats, 0, sizeof(g_stats));
+    
+    return 0;
+}
+
+static void message_processor_thread_entry(void *p1, void *p2, void *p3)
+{
+    (void)p1; (void)p2; (void)p3;
+    
+    meshtastic_FromRadio msg;
+    
+    printk("Message processor thread started\n");
+    
+    while (1) {
+        // Wait for a message to be available in the ring buffer
+        if (ring_buffer_wait(g_rx_queue, K_FOREVER)) {
+            // Process all available messages
+            while (ring_buffer_get(g_rx_queue, &msg)) {
+                process_message(&msg);
+            }
+        }
+    }
+}
+
+int message_processor_start(void)
+{
+    if (!g_rx_queue || !g_message_history || !g_node_list) {
+        printk("Message processor not initialized\n");
+        return -EINVAL;
+    }
+    
+    // Create the thread
+    k_thread_create(&g_msg_task_thread, g_msg_task_stack,
+                    K_THREAD_STACK_SIZEOF(g_msg_task_stack),
+                    (k_thread_entry_t)message_processor_thread_entry,
+                    NULL, NULL, NULL,
+                    K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
+    
+    printk("Message processor thread created\n");
+    return 0;
+}
+
+// This is now a separate function that can be called from main
+bool message_processor_wait_for_my_node_info(int timeout_ms)
+{
+    if (!g_node_list) return false;
+    
+    int elapsed_ms = 0;
+    
+    printk("Waiting for my node info...\n");
+    
+    while (!g_node_list->my_info.valid && elapsed_ms < timeout_ms) {
+        send_want_config();
+        printk("Sent want_config, waiting 2 seconds...\n");
+        k_sleep(K_SECONDS(2));
+        elapsed_ms += 2000;
+    }
+    
+    if (g_node_list->my_info.valid) {
+        printk("My node info received! Node num: %u\n", (unsigned int)g_node_list->my_info.num);
+        return true;
+    } else {
+        printk("Timeout waiting for my node info\n");
+        return false;
+    }
+}
+
+void message_processor_get_stats(uint32_t *processed_count, uint32_t *error_count)
+{
+    if (processed_count) *processed_count = g_stats.messages_processed;
+    if (error_count) *error_count = g_stats.errors;
+}

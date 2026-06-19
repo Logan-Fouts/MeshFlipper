@@ -1,13 +1,9 @@
 #ifndef NODE_H
 #define NODE_H
 
-#include <stdbool.h>
-#include <stdint.h>
-#include <zephyr/kernel.h>
 #include <zephyr/spinlock.h>
 #include "meshtastic/mesh.pb.h"
-
-#define MAX_NODE_HISTORY 300
+#include "config/common.h"
 
 struct node_info {
     bool valid;

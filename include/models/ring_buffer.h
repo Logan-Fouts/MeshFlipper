@@ -1,12 +1,10 @@
 #ifndef RING_BUFFER_H
 #define RING_BUFFER_H
 
-#include <stdbool.h>
-#include <stddef.h>
 #include <zephyr/kernel.h>
 #include "meshtastic/mesh.pb.h"
+#include "config/common.h"
 
-#define RING_BUFFER_SIZE 16
 
 typedef struct {
     meshtastic_FromRadio buffer[RING_BUFFER_SIZE];
