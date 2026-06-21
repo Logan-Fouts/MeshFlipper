@@ -11,6 +11,10 @@ int button_init(button_t *btn, const button_hal_config_t *hal_config) {
     btn->long_press_threshold_ms = BUTTON_HOME_HOLD_MS;
     btn->long_press_handled = false;
     btn->press_start_time = 0;
+    btn->callbacks.on_press = NULL;
+    btn->callbacks.on_release = NULL;
+    btn->callbacks.on_long_press = NULL;
+    btn->user_data = NULL;
     
     int ret = button_hal_init(&btn->hal_config);
     if (ret < 0) return ret;
@@ -22,7 +26,7 @@ int button_init(button_t *btn, const button_hal_config_t *hal_config) {
     return 0;
 }
 
-int button_update(button_t *btn, button_callbacks_t *callbacks) {
+int button_update(button_t *btn) {
     if (!btn) return -EINVAL;
     
     int current_level = button_hal_read(&btn->hal_config);
@@ -37,8 +41,8 @@ int button_update(button_t *btn, button_callbacks_t *callbacks) {
         btn->press_start_time = k_uptime_get();
         btn->long_press_handled = false;
         
-        if (callbacks && callbacks->on_press) {
-            callbacks->on_press(btn->hal_config.pin);
+        if (btn->callbacks.on_press) {
+            btn->callbacks.on_press(btn->hal_config.pin, btn->user_data);
         }
     }
     
@@ -48,8 +52,8 @@ int button_update(button_t *btn, button_callbacks_t *callbacks) {
             btn->state = BUTTON_LONG_PRESS_DETECTED;
             btn->long_press_handled = true;
             
-            if (callbacks && callbacks->on_long_press) {
-                callbacks->on_long_press(btn->hal_config.pin);
+            if (btn->callbacks.on_long_press) {
+                btn->callbacks.on_long_press(btn->hal_config.pin, btn->user_data);
             }
         }
     }
@@ -58,8 +62,8 @@ int button_update(button_t *btn, button_callbacks_t *callbacks) {
         btn->state = BUTTON_RELEASED;
         btn->press_start_time = 0;
         
-        if (callbacks && callbacks->on_release) {
-            callbacks->on_release(btn->hal_config.pin);
+        if (btn->callbacks.on_release) {
+            btn->callbacks.on_release(btn->hal_config.pin, btn->user_data);
         }
     }
     
