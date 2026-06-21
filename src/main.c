@@ -121,45 +121,26 @@ static void test_display_pins(void)
 
 static int setup_display(void)
 {
-    printk("=== DISPLAY SETUP STARTING ===\n");
-    
     display_hal_config_t hal_config = weact_display_get_config();
     
-    printk("DISPLAY SETUP: Config SPI=%p, CS=%d, DC=%d, RST=%d, BUSY=%d\n",
-           hal_config.spi_dev, hal_config.cs_pin.pin, 
-           hal_config.dc_pin.pin, hal_config.rst_pin.pin, 
-           hal_config.busy_pin.pin);
-    
-    printk("DISPLAY SETUP: Calling display_ui_init...\n");
     int ret = display_ui_init(&g_display_ui, &hal_config, &g_message_history, &g_node_list);
     if (ret < 0) {
         printk("DISPLAY SETUP: Display UI init failed: %d\n", ret);
         return -1;
     }
-    printk("DISPLAY SETUP: Display UI initialized\n");
-    
-    // Show test pattern
-    printk("DISPLAY SETUP: Showing test pattern...\n");
-    display_ui_test_pattern(&g_display_ui);
-    k_sleep(K_MSEC(3000));
-    
-    printk("DISPLAY SETUP: Showing boot screen...\n");
+    message_processor_set_display_ui(&g_display_ui);
     display_ui_show_boot(&g_display_ui);
-    k_sleep(K_MSEC(2000));
-    
-    printk("DISPLAY SETUP: COMPLETE!\n");
+
     return 0;
 }
 
 static int setup_buttons(void)
 {
-    printk("Setting up buttons...\n");
     int ret = ui_button_handler_init(&g_button_ctx, &g_display_ui);
     if (ret < 0) {
         LOG_ERR("Button handler init failed: %d", ret);
         return -1;
     }
-    printk("Buttons setup complete\n");
     return 0;
 }
 
@@ -174,9 +155,6 @@ static int setup(void)
     if (setup_message_processor() != 0) {
         return -1;
     }
-
-    // Test display pins first
-    test_display_pins();
 
     if (setup_display() != 0) {
         LOG_WRN("Display setup failed - continuing without display");
@@ -204,14 +182,9 @@ int main(void)
 
     printk("MeshFlipper ready!\n");
     
-    // Wait for my node info
-    bool got_info = message_processor_wait_for_my_node_info(WAIT_FOR_NODE_INFO_TIMEOUT_MS);
-    
-    if (got_info) {
-        printk("My node info received! Node num: %u\n", g_node_list.my_info.num);
-    } else {
+    if (!message_processor_wait_for_my_node_info(WAIT_FOR_NODE_INFO_TIMEOUT_MS)) {
         printk("Failed to get my node info\n");
-    }
+    } 
 
     // Show inbox after getting node info
     if (g_display_ui.initialized) {
@@ -231,19 +204,14 @@ int main(void)
         if (display_ui_take_outgoing(&g_display_ui, &outgoing)) {
             LOG_INF("Sending message to %d: %s", outgoing.target_node, outgoing.text);
             
-            // TODO: Implement send_message_to_node function
-            // For now, just print the message
-            printk("Would send to %d: %s\n", outgoing.target_node, outgoing.text);
-            
-            /* Commented out until send_message_to_node is implemented
-            int send_ret = send_message_to_node(outgoing.target_node, 
-                                               outgoing.text, 
-                                               g_node_list.my_info.num,
-                                               &g_message_history);
+            // Use the existing send_text_message function
+            int send_ret = send_text_message((uint32_t)outgoing.target_node, 
+                                             outgoing.text, 
+                                             strlen(outgoing.text));
             if (send_ret < 0) {
                 LOG_ERR("Send failed: %d", send_ret);
-            }
-            */
+                printk("Send failed: %d\n", send_ret);
+            } 
         }
         
         // Check for new messages to display

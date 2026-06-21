@@ -33,7 +33,7 @@ struct display_node_entry {
     bool favorited;
 };
 
-typedef struct {
+typedef struct display_ui_t {
     display_driver_t driver;
     struct messageHistory *message_history;
     struct nodeHistory *node_history;
@@ -51,6 +51,7 @@ typedef struct {
     int32_t thread_node_num;
     int32_t selected_target_node;
     struct screen_ui_outgoing pending;
+    bool popup_active;
     
     struct message thread_snapshot[32];
     size_t thread_snapshot_count;
@@ -73,5 +74,6 @@ int display_ui_refresh(display_ui_t *ui);
 int display_ui_test_pattern(display_ui_t *ui);
 int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action);
 bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgoing);
+void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg);  // NEW
 
 #endif

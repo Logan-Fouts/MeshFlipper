@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 
-LOG_MODULE_REGISTER(display_ui, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(display_ui, LOG_LEVEL_INF);
 
 #define MAX_VISIBLE_MESSAGES 6
 #define INBOX_VISIBLE_ROWS 4
@@ -22,7 +22,10 @@ static const char *const quick_replies[] = {
     "Bye",
 };
 
-/* Forward declarations of static helper functions */
+// Current selection state for inbox
+static int current_display_index = 0;
+
+/* Forward declarations */
 static const char* get_node_name(const struct nodeHistory *node_hist, int32_t node_num);
 static bool is_broadcast_message(const struct message *msg);
 static void build_wrapped_preview(char *out, size_t out_size, const char *text,
@@ -34,6 +37,18 @@ static bool resolve_thread_target(display_ui_t *ui, int32_t *out_node_num);
 static void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num);
 static void rebuild_broadcast_thread_snapshot(display_ui_t *ui);
 static void rebuild_node_picker_snapshot(display_ui_t *ui);
+static bool history_get_message_at(struct messageHistory *hist, int idx,
+                                   int32_t *out_id, int32_t *out_from_num, 
+                                   int32_t *out_to_num, const char **out_text);
+static bool get_thread_peer_for_message(const struct messageHistory *hist, int idx,
+                                        uint32_t my_node_num, int32_t *out_peer,
+                                        bool *out_outgoing);
+static int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MESSAGES]);
+static int inbox_selected_position(const int *inbox_indices, int inbox_count);
+static int inbox_start_index(int selected_pos, int inbox_count);
+static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t target_node);
+static bool is_broadcast_compose_selected(display_ui_t *ui);
+static void draw_message_popup(display_ui_t *ui, const struct message *msg);
 
 /* Helper: Get node name */
 static const char* get_node_name(const struct nodeHistory *node_hist, int32_t node_num)
@@ -202,6 +217,7 @@ static int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MES
         real_indices[real_count++] = per_node_latest[i];
     }
 
+    // Sort descending by index (most recent first)
     for (int i = 0; i < real_count - 1; i++) {
         for (int j = i + 1; j < real_count; j++) {
             if (real_indices[j] > real_indices[i]) {
@@ -220,6 +236,133 @@ static int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MES
     return count;
 }
 
+/* Inbox selection helpers */
+static int inbox_selected_position(const int *inbox_indices, int inbox_count)
+{
+    for (int i = 0; i < inbox_count; i++) {
+        if (inbox_indices[i] == current_display_index) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+static int inbox_start_index(int selected_pos, int inbox_count)
+{
+    if (inbox_count <= INBOX_VISIBLE_ROWS) {
+        return 0;
+    }
+
+    int start = selected_pos - (INBOX_VISIBLE_ROWS - 1);
+    if (start < 0) {
+        start = 0;
+    }
+
+    int max_start = inbox_count - INBOX_VISIBLE_ROWS;
+    if (start > max_start) {
+        start = max_start;
+    }
+
+    return start;
+}
+
+/* Add sent message to UI */
+static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t target_node)
+{
+    printk("UI: Adding sent message to thread/inbox\n");
+    
+    // Create a temporary message structure for the sent message
+    struct message sent_msg = {
+        .id = -1,  // Temporary ID, will be replaced when radio echoes back
+        .from = ui->node_history->my_info.num,
+        .to = target_node,
+    };
+    strncpy(sent_msg.text, text, MAX_MESSAGE_TEXT_LENGTH - 1);
+    sent_msg.text[MAX_MESSAGE_TEXT_LENGTH - 1] = '\0';
+    
+    // Add to message history
+    k_spinlock_key_t key = k_spin_lock(&ui->message_history->lock);
+    
+    // Add to history
+    size_t idx = ui->message_history->count % MAX_MESSAGE_HISTORY;
+    ui->message_history->messages[idx] = sent_msg;
+    ui->message_history->count++;
+    ui->message_history->newest_message = &ui->message_history->messages[idx];
+    
+    k_spin_unlock(&ui->message_history->lock, key);
+    
+    printk("UI: Sent message added to history at index %zu\n", idx);
+    
+    // If in a thread, add to thread snapshot
+    if (ui->thread_active) {
+        // If this is a DM thread, add to thread snapshot
+        if (!ui->thread_broadcast && target_node == ui->thread_node_num) {
+            // Add to thread snapshot
+            if (ui->thread_snapshot_count < 32) {
+                ui->thread_snapshot[ui->thread_snapshot_count++] = sent_msg;
+            } else {
+                // Shift and add
+                for (size_t i = 0; i < 31; i++) {
+                    ui->thread_snapshot[i] = ui->thread_snapshot[i + 1];
+                }
+                ui->thread_snapshot[31] = sent_msg;
+            }
+            ui->thread_message_index = ui->thread_snapshot_count - 1;
+            printk("UI: Added to DM thread snapshot\n");
+        }
+        // If broadcast thread, add to broadcast thread
+        else if (ui->thread_broadcast && target_node == 0) {
+            if (ui->thread_snapshot_count < 32) {
+                ui->thread_snapshot[ui->thread_snapshot_count++] = sent_msg;
+            } else {
+                for (size_t i = 0; i < 31; i++) {
+                    ui->thread_snapshot[i] = ui->thread_snapshot[i + 1];
+                }
+                ui->thread_snapshot[31] = sent_msg;
+            }
+            ui->thread_message_index = ui->thread_snapshot_count - 1;
+            printk("UI: Added to broadcast thread snapshot\n");
+        }
+    }
+    
+    printk("UI: Sent message added successfully\n");
+}
+
+/* Draw message popup */
+static void draw_message_popup(display_ui_t *ui, const struct message *msg)
+{
+    if (!msg || !ui) return;
+    
+    // Get sender name
+    const char *sender_name = get_node_name(ui->node_history, msg->from);
+    
+    // Draw popup overlay
+    display_driver_draw_filled_rect(&ui->driver, 12, 46, 
+                                    ui->driver.hal_config.width - 24, 
+                                    ui->driver.hal_config.height - 74, false);
+    display_driver_draw_rect(&ui->driver, 12, 46, 
+                             ui->driver.hal_config.width - 24, 
+                             ui->driver.hal_config.height - 74, true);
+    display_driver_draw_rect(&ui->driver, 12, 66, 
+                             ui->driver.hal_config.width - 24, 1, true);
+    
+    display_driver_draw_text_centered(&ui->driver, 53, 1, true, "NEW MESSAGE");
+    
+    char from_line[52];
+    snprintf(from_line, sizeof(from_line), "FROM %s", sender_name);
+    display_driver_draw_text_limited(&ui->driver, 18, 72, 1, false, from_line, 28);
+    
+    display_driver_draw_rect(&ui->driver, 16, 84, 
+                             ui->driver.hal_config.width - 32, 1, true);
+    
+    // Wrap message text
+    char popup_text[192];
+    size_t popup_chars_per_line = (size_t)((ui->driver.hal_config.width - 36) / 6);
+    build_wrapped_preview(popup_text, sizeof(popup_text), msg->text, 
+                          popup_chars_per_line, 9);
+    display_driver_draw_text(&ui->driver, 18, 90, 1, true, popup_text);
+}
+
 /* Rebuild thread snapshot */
 static void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num)
 {
@@ -235,19 +378,17 @@ static void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num)
 
     for (size_t seq = start; seq < count; seq++) {
         struct message candidate = hist->messages[seq % 32];
-        if (candidate.id == 0) continue;
+        if (candidate.id == 0 && candidate.id != -1) continue;
 
         uint32_t from = (uint32_t)candidate.from;
         uint32_t to = (uint32_t)candidate.to;
         
-        if (from == to) continue;
-        if (!((from == my_node_num && to == peer_node_num) ||
-              (from == peer_node_num && to == my_node_num))) {
-            continue;
-        }
-
-        if (ui->thread_snapshot_count < 32) {
-            ui->thread_snapshot[ui->thread_snapshot_count++] = candidate;
+        // Include sent messages (from == my_node_num) as well
+        if ((from == my_node_num && to == peer_node_num) ||
+            (from == peer_node_num && to == my_node_num)) {
+            if (ui->thread_snapshot_count < 32) {
+                ui->thread_snapshot[ui->thread_snapshot_count++] = candidate;
+            }
         }
     }
 }
@@ -343,19 +484,36 @@ static int render_inbox(display_ui_t *ui)
     
     int inbox_indices[MAX_VISIBLE_MESSAGES];
     int inbox_count = build_inbox_indices(ui, inbox_indices);
+    int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+
+    if (inbox_count > 0) {
+        current_display_index = inbox_indices[selected_pos];
+    }
     
-    /* Draw top bar */
+    /* Top bar */
     display_driver_draw_text_centered(&ui->driver, 5, 1, false, "MESSAGES");
     display_driver_draw_rect(&ui->driver, 0, 23, ui->driver.hal_config.width, 1, true);
     
-    /* Draw bottom bar */
+    /* Bottom bar */
     display_driver_draw_rect(&ui->driver, 0, ui->driver.hal_config.height - 14, 
                              ui->driver.hal_config.width, 1, true);
     char status[32];
     snprintf(status, sizeof(status), "INBOX: %d", inbox_count);
     display_driver_draw_text(&ui->driver, 4, ui->driver.hal_config.height - 11, 1, false, status);
     
-    /* Draw content area */
+    /* Navigation arrows */
+    if (inbox_count > 1) {
+        display_driver_draw_text(&ui->driver, ui->driver.hal_config.width - 24, 
+                                 ui->driver.hal_config.height - 11, 1, false, "< >");
+        char idx_str[16];
+        snprintf(idx_str, sizeof(idx_str), "%u/%u",
+                 (unsigned int)(selected_pos + 1),
+                 (unsigned int)inbox_count);
+        display_driver_draw_text(&ui->driver, ui->driver.hal_config.width - 44, 
+                                 ui->driver.hal_config.height - 11, 1, false, idx_str);
+    }
+    
+    /* Content area */
     display_driver_draw_rect(&ui->driver, 2, 26, ui->driver.hal_config.width - 4, 
                              ui->driver.hal_config.height - 40, true);
     
@@ -363,14 +521,25 @@ static int render_inbox(display_ui_t *ui)
         display_driver_draw_text_centered(&ui->driver, ui->driver.hal_config.height / 2 - 20, 
                                           2, true, "NO MESSAGES");
     } else {
-        /* Render inbox list */
         const int row_h = 36;
-        int rows = inbox_count > INBOX_VISIBLE_ROWS ? INBOX_VISIBLE_ROWS : inbox_count;
-        
+        int start = inbox_start_index(selected_pos, inbox_count);
+        int rows = inbox_count - start;
+        if (rows > INBOX_VISIBLE_ROWS) {
+            rows = INBOX_VISIBLE_ROWS;
+        }
+
         for (int i = 0; i < rows; i++) {
-            int idx = inbox_indices[i];
+            int visible_idx = start + i;
+            int idx = inbox_indices[visible_idx];
             int row_y = 28 + (i * row_h);
-            
+
+            if (visible_idx == selected_pos) {
+                display_driver_draw_rect(&ui->driver, 4, row_y - 1, 
+                                         ui->driver.hal_config.width - 8, row_h - 1, true);
+                display_driver_draw_rect(&ui->driver, 4, row_y - 2, 
+                                         ui->driver.hal_config.width - 8, row_h, true);
+            }
+
             if (idx == INBOX_BROADCAST_COMPOSE_INDEX) {
                 display_driver_draw_text_limited(&ui->driver, 8, row_y + 3, 1, true, "BROADCAST", 22);
                 display_driver_draw_text_limited(&ui->driver, 8, row_y + 16, 1, false, "SEND TO ALL NODES", 31);
@@ -378,12 +547,28 @@ static int render_inbox(display_ui_t *ui)
                 int32_t from_num = 0;
                 const char *msg_text = "";
                 history_get_message_at(ui->message_history, idx, NULL, &from_num, NULL, &msg_text);
-                const char *from_name = get_node_name(ui->node_history, from_num);
                 
-                display_driver_draw_text_limited(&ui->driver, 8, row_y + 3, 1, true, from_name, 22);
+                // Check if this message was sent by us
+                bool is_outgoing = (from_num == (int32_t)ui->node_history->my_info.num);
+                const char *display_name;
+                
+                if (is_outgoing) {
+                    // For outgoing messages, show the recipient's name (or "BROADCAST" if it was a broadcast)
+                    int32_t to_num = 0;
+                    history_get_message_at(ui->message_history, idx, NULL, NULL, &to_num, NULL);
+                    if (to_num == 0 || to_num == 0xFFFFFFFFu) {
+                        display_name = "BROADCAST";
+                    } else {
+                        display_name = get_node_name(ui->node_history, to_num);
+                    }
+                } else {
+                    display_name = get_node_name(ui->node_history, from_num);
+                }
+                
+                display_driver_draw_text_limited(&ui->driver, 8, row_y + 3, 1, true, display_name, 22);
                 display_driver_draw_text_limited(&ui->driver, 8, row_y + 16, 1, false, msg_text, 31);
             }
-            
+
             if (i < rows - 1) {
                 display_driver_draw_rect(&ui->driver, 6, row_y + row_h - 2, 
                                          ui->driver.hal_config.width - 12, 1, true);
@@ -406,7 +591,7 @@ static int render_thread_screen(display_ui_t *ui)
         target_label[sizeof(target_label) - 1] = '\0';
     }
     
-    /* Header */
+    /* Header - always show the recipient name or BROADCAST */
     char title[72];
     snprintf(title, sizeof(title), "DM: %s", target_label);
     display_driver_draw_text_limited(&ui->driver, 4, 4, 1, false, title, 28);
@@ -443,7 +628,6 @@ static int render_thread_screen(display_ui_t *ui)
             
             int x = outgoing ? (ui->driver.hal_config.width - bubble_width - bubble_padding) : bubble_padding;
             
-            /* Calculate bubble height based on text */
             char bubble_text[512];
             build_wrapped_preview(bubble_text, sizeof(bubble_text), msg->text, chars_per_line, 10);
             size_t lines = 1;
@@ -456,6 +640,7 @@ static int render_thread_screen(display_ui_t *ui)
             
             display_driver_draw_rect(&ui->driver, x, y, bubble_width, bubble_h, true);
             
+            // For outgoing messages, show "YOU" as the sender
             const char *sender = outgoing ? "YOU" : get_node_name(ui->node_history, msg->from);
             display_driver_draw_text(&ui->driver, outgoing ? x + bubble_width - 30 : x + 6, y + 2, 1, false, sender);
             display_driver_draw_rect(&ui->driver, x + 4, y + 12, bubble_width - 8, 1, true);
@@ -495,21 +680,45 @@ static int render_node_picker(display_ui_t *ui)
                                           1, false, "WAITING FOR NODE INFO");
     } else {
         const int row_h = 36;
+        // Calculate which nodes to show based on current index
         size_t start = 0;
-        size_t rows = ui->node_snapshot_count > NODE_PICKER_VISIBLE_ROWS ? 
-                      NODE_PICKER_VISIBLE_ROWS : ui->node_snapshot_count;
+        size_t max_visible = NODE_PICKER_VISIBLE_ROWS;
+        
+        // If we have more nodes than visible rows, calculate start
+        if (ui->node_snapshot_count > max_visible) {
+            // Center the selected item if possible
+            if (ui->node_picker_index >= max_visible / 2) {
+                start = ui->node_picker_index - max_visible / 2;
+                // Make sure we don't go past the end
+                if (start + max_visible > ui->node_snapshot_count) {
+                    start = ui->node_snapshot_count - max_visible;
+                }
+            }
+        }
+        
+        size_t rows = ui->node_snapshot_count - start;
+        if (rows > max_visible) {
+            rows = max_visible;
+        }
         
         for (size_t i = 0; i < rows; i++) {
+            size_t idx = start + i;
             int row_y = 28 + (int)(i * row_h);
-            const struct display_node_entry *entry = &ui->node_snapshot[i];
+            const struct display_node_entry *entry = &ui->node_snapshot[idx];
             
-            if (i == ui->node_picker_index) {
+            // Draw thick border around selected entry (like the original style)
+            if (idx == ui->node_picker_index) {
+                // Draw a thicker border (2px) around the selected row
                 display_driver_draw_rect(&ui->driver, 4, row_y - 1, 
                                          ui->driver.hal_config.width - 8, row_h - 1, true);
+                display_driver_draw_rect(&ui->driver, 4, row_y - 2, 
+                                         ui->driver.hal_config.width - 8, row_h, true);
             }
             
             char node_id[20];
             snprintf(node_id, sizeof(node_id), "0x%08X", (unsigned int)entry->node_num);
+            
+            // Always draw text in black (true = black)
             display_driver_draw_text_limited(&ui->driver, 8, row_y + 3, 1, true, entry->label, 24);
             display_driver_draw_text_limited(&ui->driver, 8, row_y + 16, 1, false, node_id, 16);
             
@@ -527,8 +736,12 @@ static int render_node_picker(display_ui_t *ui)
                              "2/4 Nav 3 Pick 5 Back");
     
     char idx_text[24];
-    snprintf(idx_text, sizeof(idx_text), "%u/%u", (unsigned int)(ui->node_picker_index + 1),
-             (unsigned int)ui->node_snapshot_count);
+    if (ui->node_snapshot_count > 0) {
+        snprintf(idx_text, sizeof(idx_text), "%u/%u", (unsigned int)(ui->node_picker_index + 1),
+                 (unsigned int)ui->node_snapshot_count);
+    } else {
+        snprintf(idx_text, sizeof(idx_text), "0/0");
+    }
     display_driver_draw_text(&ui->driver, ui->driver.hal_config.width - 46, 
                              ui->driver.hal_config.height - 11, 1, false, idx_text);
     
@@ -584,25 +797,17 @@ static bool resolve_thread_target(display_ui_t *ui, int32_t *out_node_num)
     int inbox_count = build_inbox_indices(ui, inbox_indices);
     if (inbox_count <= 0) return false;
 
-    /* Find selected index */
-    int selected_idx = INBOX_BROADCAST_COMPOSE_INDEX;
-    for (int i = 0; i < inbox_count; i++) {
-        if (inbox_indices[i] == INBOX_BROADCAST_COMPOSE_INDEX) {
-            selected_idx = i;
-            break;
-        }
-    }
+    int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+    int selected_raw = inbox_indices[selected_pos];
+    current_display_index = selected_raw;
 
-    if (selected_idx == INBOX_BROADCAST_COMPOSE_INDEX || selected_idx >= inbox_count) {
+    if (selected_raw == INBOX_BROADCAST_COMPOSE_INDEX) {
         return false;
     }
 
-    int raw_idx = inbox_indices[selected_idx];
-    if (raw_idx == INBOX_BROADCAST_COMPOSE_INDEX) return false;
-
     uint32_t my_node_num = ui->node_history->my_info.num;
-    uint32_t from = (uint32_t)ui->message_history->messages[raw_idx].from;
-    uint32_t to = (uint32_t)ui->message_history->messages[raw_idx].to;
+    uint32_t from = (uint32_t)ui->message_history->messages[selected_raw].from;
+    uint32_t to = (uint32_t)ui->message_history->messages[selected_raw].to;
 
     if (from == my_node_num) {
         if (to == 0 || to == 0xFFFFFFFFu || to == my_node_num) return false;
@@ -615,13 +820,28 @@ static bool resolve_thread_target(display_ui_t *ui, int32_t *out_node_num)
     return true;
 }
 
+/* Check if broadcast compose is selected */
+static bool is_broadcast_compose_selected(display_ui_t *ui)
+{
+    int inbox_indices[MAX_VISIBLE_MESSAGES];
+    int inbox_count = build_inbox_indices(ui, inbox_indices);
+    if (inbox_count <= 0) return false;
+
+    int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+    int selected_raw = inbox_indices[selected_pos];
+    current_display_index = selected_raw;
+
+    return selected_raw == INBOX_BROADCAST_COMPOSE_INDEX;
+}
+
+/* Public API: Initialize */
 int display_ui_init(display_ui_t *ui, const display_hal_config_t *hal_config,
                     struct messageHistory *msg_hist, struct nodeHistory *node_hist)
 {
     printk("DISPLAY_UI_INIT: Starting...\n");
     
     if (!ui || !hal_config) {
-        printk("DISPLAY_UI_INIT: Invalid params: ui=%p, hal_config=%p\n", ui, hal_config);
+        printk("DISPLAY_UI_INIT: Invalid params\n");
         return -EINVAL;
     }
     
@@ -646,10 +866,13 @@ int display_ui_init(display_ui_t *ui, const display_hal_config_t *hal_config,
     ui->node_picker_active = false;
     ui->compose_active = false;
     ui->compose_broadcast = false;
+    ui->popup_active = false;
+    current_display_index = 0;
     
     printk("DISPLAY_UI_INIT: Complete!\n");
     return 0;
 }
+
 int display_ui_deinit(display_ui_t *ui)
 {
     if (!ui) return -EINVAL;
@@ -673,6 +896,7 @@ int display_ui_show_boot(display_ui_t *ui)
 int display_ui_show_inbox(display_ui_t *ui)
 {
     if (!ui || !ui->initialized) return -EINVAL;
+    current_display_index = 0;
     return render_inbox(ui);
 }
 
@@ -759,63 +983,132 @@ int display_ui_refresh(display_ui_t *ui)
 /* Public API: Handle actions */
 int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
 {
-    if (!ui || !ui->initialized) return -EINVAL;
+    printk("HANDLE ACTION: %d\n", action);
+    
+    if (!ui || !ui->initialized) {
+        printk("UI not initialized!\n");
+        return -EINVAL;
+    }
 
-    /* Home action - exit everything */
+    // Home action - exit everything
     if (action == SCREEN_UI_ACTION_HOME) {
+        printk("HOME action\n");
         ui->compose_active = false;
         ui->thread_active = false;
         ui->thread_broadcast = false;
         ui->node_picker_active = false;
+        current_display_index = 0;
         return display_ui_refresh(ui);
     }
 
-    /* Inbox state */
+    // Inbox state - this is the main inbox view
     if (!ui->compose_active && !ui->thread_active && !ui->node_picker_active) {
+        printk("Inbox state, action: %d\n", action);
+        
+        if (action == SCREEN_UI_ACTION_PREVIOUS) {
+            // Move to previous message in inbox
+            int inbox_indices[MAX_VISIBLE_MESSAGES];
+            int inbox_count = build_inbox_indices(ui, inbox_indices);
+            if (inbox_count > 0) {
+                int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+                selected_pos = (selected_pos - 1 + inbox_count) % inbox_count;
+                current_display_index = inbox_indices[selected_pos];
+                return render_inbox(ui);
+            }
+            return 0;
+        }
+
+        if (action == SCREEN_UI_ACTION_NEXT) {
+            // Move to next message in inbox
+            int inbox_indices[MAX_VISIBLE_MESSAGES];
+            int inbox_count = build_inbox_indices(ui, inbox_indices);
+            if (inbox_count > 0) {
+                int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
+                selected_pos = (selected_pos + 1) % inbox_count;
+                current_display_index = inbox_indices[selected_pos];
+                return render_inbox(ui);
+            }
+            return 0;
+        }
+
         if (action == SCREEN_UI_ACTION_PRIMARY) {
-            /* Enter thread view */
+            // Enter thread view for selected message
+            printk("PRIMARY in inbox - trying to enter thread\n");
+            
+            if (is_broadcast_compose_selected(ui)) {
+                ui->thread_active = true;
+                ui->thread_broadcast = true;
+                ui->thread_message_index = 0;
+                rebuild_broadcast_thread_snapshot(ui);
+                if (ui->thread_snapshot_count > 0) {
+                    ui->thread_message_index = ui->thread_snapshot_count - 1;
+                }
+                return render_thread_screen(ui);
+            }
+
             int32_t thread_node = 0;
             if (resolve_thread_target(ui, &thread_node)) {
                 return display_ui_show_thread(ui, thread_node, false);
             }
+            printk("No thread target found\n");
             return 0;
         }
+
         if (action == SCREEN_UI_ACTION_SECONDARY) {
+            // Show node picker
+            printk("SECONDARY in inbox - showing node picker\n");
             return display_ui_show_node_picker(ui);
         }
         return 0;
     }
 
-    /* Node picker state */
+    // Node picker state
     if (ui->node_picker_active && !ui->compose_active && !ui->thread_active) {
+        printk("Node picker state, action: %d\n", action);
+        
         if (action == SCREEN_UI_ACTION_PREVIOUS || action == SCREEN_UI_ACTION_NEXT) {
             rebuild_node_picker_snapshot(ui);
-            if (ui->node_snapshot_count == 0) return render_node_picker(ui);
+            if (ui->node_snapshot_count == 0) {
+                return render_node_picker(ui);
+            }
             
             if (action == SCREEN_UI_ACTION_PREVIOUS) {
-                ui->node_picker_index = (ui->node_picker_index == 0) ? 
-                    ui->node_snapshot_count - 1 : ui->node_picker_index - 1;
-            } else {
+                // Wrap around to the end if at the beginning
+                if (ui->node_picker_index == 0) {
+                    ui->node_picker_index = ui->node_snapshot_count - 1;
+                } else {
+                    ui->node_picker_index--;
+                }
+            } else { // NEXT
+                // Wrap around to the beginning if at the end
                 ui->node_picker_index = (ui->node_picker_index + 1) % ui->node_snapshot_count;
             }
+            printk("Node picker index: %zu/%zu\n", ui->node_picker_index + 1, ui->node_snapshot_count);
             return render_node_picker(ui);
         }
+        
         if (action == SCREEN_UI_ACTION_PRIMARY) {
             rebuild_node_picker_snapshot(ui);
-            if (ui->node_snapshot_count == 0) return render_node_picker(ui);
+            if (ui->node_snapshot_count == 0) {
+                return render_node_picker(ui);
+            }
             
             ui->node_picker_active = false;
             return display_ui_show_compose(ui, (int32_t)ui->node_snapshot[ui->node_picker_index].node_num, false);
         }
+        
         if (action == SCREEN_UI_ACTION_SECONDARY) {
             ui->node_picker_active = false;
+            current_display_index = 0;
             return display_ui_refresh(ui);
         }
         return 0;
     }
 
-    /* Thread state */
+    // Thread state
     if (ui->thread_active && !ui->compose_active) {
+        printk("Thread state, action: %d\n", action);
+        
         if (action == SCREEN_UI_ACTION_PREVIOUS || action == SCREEN_UI_ACTION_NEXT) {
             if (ui->thread_snapshot_count == 0) return render_thread_screen(ui);
             
@@ -827,48 +1120,71 @@ int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
             }
             return render_thread_screen(ui);
         }
+        
         if (action == SCREEN_UI_ACTION_PRIMARY) {
+            // Reply - enter compose mode
             return display_ui_show_compose(ui, ui->thread_node_num, ui->thread_broadcast);
         }
+        
         if (action == SCREEN_UI_ACTION_SECONDARY) {
+            // Back to inbox
             ui->thread_active = false;
             ui->thread_broadcast = false;
+            current_display_index = 0;
             return display_ui_refresh(ui);
         }
         return 0;
     }
 
-    /* Compose state */
+    // Compose state
     if (ui->compose_active) {
+        printk("Compose state, action: %d\n", action);
+        
         if (action == SCREEN_UI_ACTION_PREVIOUS) {
             ui->quick_reply_index = (ui->quick_reply_index == 0) ? 
                 MAX_QUICK_REPLIES - 1 : ui->quick_reply_index - 1;
             render_compose(ui);
             return 0;
         }
+        
         if (action == SCREEN_UI_ACTION_NEXT) {
             ui->quick_reply_index = (ui->quick_reply_index + 1) % MAX_QUICK_REPLIES;
             render_compose(ui);
             return 0;
         }
+        
         if (action == SCREEN_UI_ACTION_SECONDARY) {
             ui->compose_broadcast = !ui->compose_broadcast;
             render_compose(ui);
             return 0;
         }
+        
         if (action == SCREEN_UI_ACTION_PRIMARY) {
-            /* Send message */
+            // Get the message text
+            const char *message_text = quick_replies[ui->quick_reply_index];
+            int32_t target = ui->compose_broadcast ? 0 : ui->selected_target_node;
+            
+            printk("Sending message: '%s' to %d\n", message_text, target);
+            
+            // Store the pending message for sending
             ui->pending.valid = true;
-            ui->pending.target_node = ui->compose_broadcast ? 0 : ui->selected_target_node;
-            strncpy(ui->pending.text, quick_replies[ui->quick_reply_index], sizeof(ui->pending.text) - 1);
+            ui->pending.target_node = target;
+            strncpy(ui->pending.text, message_text, sizeof(ui->pending.text) - 1);
             ui->pending.text[sizeof(ui->pending.text) - 1] = '\0';
             
+            // Add the sent message to the UI immediately so user can see it
+            ui_add_sent_message(ui, message_text, target);
+            
+            // Exit compose
             ui->compose_active = false;
+            
+            // Refresh the UI to show the sent message
             return display_ui_refresh(ui);
         }
         return 0;
     }
 
+    printk("Unhandled action %d in unknown state\n", action);
     return 0;
 }
 
@@ -882,6 +1198,7 @@ bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgo
     return true;
 }
 
+/* Public API: Test pattern */
 int display_ui_test_pattern(display_ui_t *ui)
 {
     printk("DISPLAY_TEST: Drawing test pattern...\n");
@@ -920,4 +1237,86 @@ int display_ui_test_pattern(display_ui_t *ui)
     printk("DISPLAY_TEST: Refresh returned: %d\n", ret);
     
     return ret;
+}
+
+void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg)
+{
+    if (!ui || !ui->initialized || !msg) return;
+    
+    printk("UI: New message notification - from %d to %d, text: %s\n", msg->from, msg->to, msg->text);
+    
+    // Check if this is a broadcast message
+    bool is_broadcast = is_broadcast_message(msg);
+    uint32_t my_node = ui->node_history->my_info.num;
+    bool is_from_me = (msg->from == (int32_t)my_node);
+    
+    // Don't show popup for messages we sent
+    if (is_from_me) {
+        printk("UI: Skipping popup - message from self\n");
+        return;
+    }
+    
+    // Determine the sender/peer node
+    int32_t peer_node = msg->from;
+    if (is_broadcast) {
+        peer_node = 0;  // Broadcast has no specific peer
+    }
+    
+    // Check if we're currently in a thread with this node
+    bool in_this_thread = false;
+    if (ui->thread_active) {
+        if (is_broadcast && ui->thread_broadcast) {
+            in_this_thread = true;
+        } else if (!is_broadcast && !ui->thread_broadcast && ui->thread_node_num == peer_node) {
+            in_this_thread = true;
+        }
+    }
+    
+    // If we're in this thread, just refresh the view
+    if (in_this_thread) {
+        printk("UI: In this thread - refreshing view\n");
+        ui->last_handled_incoming_id = msg->id;
+        // Rebuild thread snapshot to include new message
+        if (ui->thread_broadcast) {
+            rebuild_broadcast_thread_snapshot(ui);
+        } else {
+            rebuild_thread_snapshot(ui, (uint32_t)ui->thread_node_num);
+        }
+        // Update index to show newest message
+        if (ui->thread_snapshot_count > 0) {
+            ui->thread_message_index = ui->thread_snapshot_count - 1;
+        }
+        display_ui_refresh(ui);
+        return;
+    }
+    
+    // If we're in a different thread or inbox, show popup
+    if (!ui->popup_active) {
+        printk("UI: Showing popup for new message\n");
+        ui->popup_active = true;
+        
+        // First, render the current screen
+        int ret = display_ui_refresh(ui);
+        if (ret < 0) {
+            printk("UI: Refresh failed: %d\n", ret);
+        }
+        
+        // Then draw popup overlay on top
+        draw_message_popup(ui, msg);
+        
+        // Refresh to show the popup
+        ret = display_driver_refresh(&ui->driver);
+        if (ret < 0) {
+            printk("UI: Popup refresh failed: %d\n", ret);
+        }
+        
+        // Wait for popup duration
+        k_sleep(K_MSEC(POPUP_DURATION_MS));
+        ui->popup_active = false;
+        
+        // Refresh to clear popup
+        display_ui_refresh(ui);
+    }
+    
+    ui->last_handled_incoming_id = msg->id;
 }

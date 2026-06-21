@@ -9,7 +9,7 @@
 
 typedef struct {
     uint8_t pin;
-    const struct device *gpio_dev;
+    const struct device *gpio_dev;  // Make sure this is a pointer
 } button_hal_config_t;
 
 int button_hal_init(const button_hal_config_t *config);

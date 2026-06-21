@@ -3,6 +3,7 @@
 #include "models/mesh_node.h"
 #include "models/ring_buffer.h"
 #include "comms/protobuf_handler.h"
+#include "ui/display_ui.h"
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <string.h>
@@ -15,6 +16,7 @@
 static ring_buffer_t *g_rx_queue = NULL;
 static struct messageHistory *g_message_history = NULL;
 static struct nodeHistory *g_node_list = NULL;
+static struct display_ui_t *g_display_ui = NULL;  // Use struct display_ui_t
 
 K_THREAD_STACK_DEFINE(g_msg_task_stack, MSG_TASK_STACK_SIZE);
 static struct k_thread g_msg_task_thread;
@@ -33,7 +35,6 @@ static struct {
 static void process_message(const meshtastic_FromRadio *msg)
 {
     if (!msg) return;
-    
     
     // Handle queue status messages
     if (msg->which_payload_variant == meshtastic_FromRadio_queueStatus_tag) {
@@ -61,14 +62,24 @@ static void process_message(const meshtastic_FromRadio *msg)
         msg->packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
         msg->packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
         
-        // Ignore messages from myself
+        // Ignore messages from myself (they're already added to history)
         if (g_node_list->my_info.valid && 
             msg->packet.from == g_node_list->my_info.num) {
             return;
         }
         
+        // Update message history
         update_message_history(g_message_history, msg);
         g_stats.messages_processed++;
+        
+        // Get the parsed message
+        struct message parsed_msg = parse_message(msg);
+        
+        // Notify the UI about the new message
+        if (g_display_ui != NULL && g_display_ui->initialized) {
+            printk("Notifying UI about new message: %s\n", parsed_msg.text);
+            display_ui_notify_new_message((display_ui_t *)g_display_ui, &parsed_msg);
+        }
     }
 }
 
@@ -88,12 +99,22 @@ int message_processor_init(ring_buffer_t *rx_queue,
     g_rx_queue = rx_queue;
     g_message_history = message_history;
     g_node_list = node_list;
+    g_display_ui = NULL;  // Will be set later
     memset(&g_stats, 0, sizeof(g_stats));
     
     return 0;
 }
 
-static void message_processor_thread_entry(void *p1, void *p2, void *p3) // Suppress unused parameter warnings
+// Set the display UI instance for notifications
+void message_processor_set_display_ui(struct display_ui_t *ui)
+{
+    g_display_ui = ui;
+    if (ui != NULL) {
+        printk("Display UI set for message notifications\n");
+    }
+}
+
+static void message_processor_thread_entry(void *p1, void *p2, void *p3)
 {
     (void)p1; (void)p2; (void)p3;
     
@@ -102,9 +123,7 @@ static void message_processor_thread_entry(void *p1, void *p2, void *p3) // Supp
     printk("Message processor thread started\n");
     
     while (1) {
-        // Wait for a message to be available in the ring buffer
         if (ring_buffer_wait(g_rx_queue, K_FOREVER)) {
-            // Process all available messages
             while (ring_buffer_get(g_rx_queue, &msg)) {
                 process_message(&msg);
             }
@@ -120,7 +139,6 @@ int message_processor_start(void)
         return -EINVAL;
     }
     
-    // Create the thread
     k_thread_create(&g_msg_task_thread, g_msg_task_stack,
                     K_THREAD_STACK_SIZEOF(g_msg_task_stack),
                     (k_thread_entry_t)message_processor_thread_entry,
@@ -131,7 +149,7 @@ int message_processor_start(void)
     return 0;
 }
 
-// Wait for my node info to be received, which indicates we've joined the mesh and can start processing messages. Returns true if we got the info, false if we timed out.
+// Wait for my node info to be received, which indicates we've joined the mesh and can start processing messages.
 bool message_processor_wait_for_my_node_info(int timeout_ms)
 {
     if (!g_node_list) return false;
