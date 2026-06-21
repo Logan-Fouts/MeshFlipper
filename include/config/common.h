@@ -12,6 +12,13 @@
 #define RING_BUFFER_SIZE 16
 
 
+// UART HAL
+#define UART_DEFAULT_BAUD_RATE 115200
+
+// Message processor task
+#define MSG_TASK_STACK_SIZE 4096
+
+
 
 
 #endif

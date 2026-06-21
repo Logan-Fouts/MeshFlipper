@@ -1,7 +1,6 @@
 #include <zephyr/kernel.h>
 #include "models/mesh_message.h"
 
-
 struct message parse_message(const meshtastic_FromRadio *msg_packet)
 {
     struct message msg = {
@@ -23,6 +22,7 @@ struct message parse_message(const meshtastic_FromRadio *msg_packet)
             copy_len = sizeof(msg.text) - 1;
         }
 
+        // Copy into message text field and ensure null termination
         memcpy(msg.text, msg_packet->packet.decoded.payload.bytes, copy_len);
         msg.text[copy_len] = '\0';
     }

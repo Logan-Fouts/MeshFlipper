@@ -22,12 +22,11 @@ ring_buffer_t g_msg_ring_buffer;
 // SETUP FUNCTIONS
 // ==================
 
+// UART interrupt handled by UART HAL, which forwards bytes to uart_comms for processing.
 static int setup_uart_hal(void) 
 {
     const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 
-    printk("Initializing UART HAL...\n");
-    
     if (uart_hal_init(&g_uart_hal, uart_dev) != 0) {
         printk("UART HAL init failed\n");
         return -1;
@@ -40,7 +39,6 @@ static int setup_uart_hal(void)
 
     // Initialize uart_comms
     uart_comms_init(&g_uart_comms, &g_uart_hal);
-    printk("UART comms initialized\n");
 
     // Set UART callback to HAL's ISR handler
     uart_irq_callback_user_data_set(uart_dev, uart_hal_isr_handler, &g_uart_hal);
@@ -51,7 +49,6 @@ static int setup_uart_hal(void)
     // Enable interrupts
     uart_hal_irq_enable(&g_uart_hal);
     
-    printk("UART HAL initialized\n");
     return 0;
 }
 
@@ -72,11 +69,10 @@ static int setup_message_processor(void)
     return 0;
 }
 
+// Sets up the UART HAL, message processor, and any other necessary components. Returns 0 on success, -1 on failure.
 static int setup(void) 
 {
-    // Initialize ring buffer
     ring_buffer_init(&g_msg_ring_buffer);
-    printk("Ring buffer initialized\n");
 
     if (setup_uart_hal() != 0) {
         return -1;

@@ -3,8 +3,8 @@
 
 #include <zephyr/kernel.h>
 #include "meshtastic/mesh.pb.h"
-#include "config/common.h"
 
+#include "config/common.h"
 
 typedef struct {
     meshtastic_FromRadio buffer[RING_BUFFER_SIZE];

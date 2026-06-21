@@ -4,6 +4,8 @@
 #include <string.h>
 #include <errno.h>
 
+#include "config/common.h"
+
 // Global UART HAL instance
 uart_hal_t g_uart_hal = {
     .dev = NULL,
@@ -12,6 +14,7 @@ uart_hal_t g_uart_hal = {
     .callback_context = NULL
 };
 
+// Initializes the UART HAL with the specified device. Returns 0 on success, -1 on failure.
 int uart_hal_init(uart_hal_t *hal, const struct device *dev)
 {
     if (!hal || !dev) return -EINVAL;
@@ -24,7 +27,7 @@ int uart_hal_init(uart_hal_t *hal, const struct device *dev)
     hal->initialized = true;
     
     // Set default config
-    hal->config.baud_rate = 115200;
+    hal->config.baud_rate = UART_DEFAULT_BAUD_RATE;
     hal->config.data_bits = 8;
     hal->config.stop_bits = 1;
     hal->config.parity = 0;
@@ -62,7 +65,7 @@ int uart_hal_configure(uart_hal_t *hal, const uart_config_t *config)
 int uart_hal_configure_default(uart_hal_t *hal)
 {
     uart_config_t config = {
-        .baud_rate = 115200,
+        .baud_rate = UART_DEFAULT_BAUD_RATE,
         .data_bits = UART_CFG_DATA_BITS_8,
         .stop_bits = UART_CFG_STOP_BITS_1,
         .parity = UART_CFG_PARITY_NONE,

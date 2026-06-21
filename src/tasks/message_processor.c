@@ -16,7 +16,6 @@ static ring_buffer_t *g_rx_queue = NULL;
 static struct messageHistory *g_message_history = NULL;
 static struct nodeHistory *g_node_list = NULL;
 
-#define MSG_TASK_STACK_SIZE 4096
 K_THREAD_STACK_DEFINE(g_msg_task_stack, MSG_TASK_STACK_SIZE);
 static struct k_thread g_msg_task_thread;
 
@@ -30,6 +29,7 @@ static struct {
 // STATIC FUNCTIONS
 // ==================
 
+// Takes a message from the ring buffer and updates the message history and node history as appropriate.
 static void process_message(const meshtastic_FromRadio *msg)
 {
     if (!msg) return;
@@ -51,7 +51,7 @@ static void process_message(const meshtastic_FromRadio *msg)
         update_node_history(g_node_list, msg);
         
         if (msg->which_payload_variant == meshtastic_FromRadio_my_info_tag) {
-            printk("✅ My info received! Node num: %u\n", (unsigned int)g_node_list->my_info.num);
+            printk("My info received! Node num: %u\n", (unsigned int)g_node_list->my_info.num);
         }
         return;
     }
@@ -61,6 +61,7 @@ static void process_message(const meshtastic_FromRadio *msg)
         msg->packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
         msg->packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
         
+        // Ignore messages from myself
         if (g_node_list->my_info.valid && 
             msg->packet.from == g_node_list->my_info.num) {
             return;
@@ -68,9 +69,6 @@ static void process_message(const meshtastic_FromRadio *msg)
         
         update_message_history(g_message_history, msg);
         g_stats.messages_processed++;
-        printk("📩 New message from %u: %s\n", 
-               (unsigned int)msg->packet.from, 
-               msg->packet.decoded.payload.bytes);
     }
 }
 
@@ -78,6 +76,7 @@ static void process_message(const meshtastic_FromRadio *msg)
 // PUBLIC FUNCTIONS
 // ================
 
+// Stores references to the ring buffer, message history, and node list for use by the message processor thread.
 int message_processor_init(ring_buffer_t *rx_queue,
                           struct messageHistory *message_history,
                           struct nodeHistory *node_list)
@@ -94,7 +93,7 @@ int message_processor_init(ring_buffer_t *rx_queue,
     return 0;
 }
 
-static void message_processor_thread_entry(void *p1, void *p2, void *p3)
+static void message_processor_thread_entry(void *p1, void *p2, void *p3) // Suppress unused parameter warnings
 {
     (void)p1; (void)p2; (void)p3;
     
@@ -113,6 +112,7 @@ static void message_processor_thread_entry(void *p1, void *p2, void *p3)
     }
 }
 
+// Starts the message processing thread with appropriate priority and stack size.
 int message_processor_start(void)
 {
     if (!g_rx_queue || !g_message_history || !g_node_list) {

@@ -3,6 +3,7 @@
 
 #include <zephyr/spinlock.h>
 #include "meshtastic/mesh.pb.h"
+
 #include "config/common.h"
 
 struct message {

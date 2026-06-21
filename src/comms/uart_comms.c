@@ -21,6 +21,7 @@ uart_comms_t g_uart_comms = {
 
 extern ring_buffer_t g_msg_ring_buffer;
 
+// Initializes the UART comms module with the specified UART HAL. Returns 0 on success, -1 on failure.
 int uart_comms_init(uart_comms_t *comms, uart_hal_t *hal)
 {
     if (!comms || !hal) return -EINVAL;
@@ -30,7 +31,7 @@ int uart_comms_init(uart_comms_t *comms, uart_hal_t *hal)
     comms->rx_pos = 0;
     comms->rx_expected_len = 0;
     comms->initialized = true;
-    memset(&comms->stats, 0, sizeof(comms->stats));
+    memset(&comms->stats, 0, sizeof(comms->stats)); // Clear stats
     
     return 0;
 }

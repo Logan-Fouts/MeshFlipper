@@ -4,6 +4,7 @@
 #include "hardware/uart_hal.h"
 #include "models/ring_buffer.h"
 
+// UART communication module that handles framing, parsing, and statistics for UART messages.
 typedef struct {
     uart_hal_t *hal;
     
@@ -20,7 +21,7 @@ typedef struct {
     size_t rx_pos;
     size_t rx_expected_len;
     
-    // Statistics
+    // Stats
     struct {
         size_t frames_received;
         size_t frames_dropped;
