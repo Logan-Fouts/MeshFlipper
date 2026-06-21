@@ -33,6 +33,7 @@ int send_meshtastic_frame(const uint8_t *payload, size_t payload_len)
     return uart_comms_send_frame(&g_uart_comms, payload, payload_len);
 }
 
+// Constructs a ToRadio message to retrieve the config, encodes it using nanopb, and sends it over UART.
 int send_want_config(void)
 {
     meshtastic_ToRadio msg = meshtastic_ToRadio_init_zero;
@@ -50,6 +51,7 @@ int send_want_config(void)
     return send_meshtastic_frame(buf, stream.bytes_written);
 }
 
+// Constructs a ToRadio message to send a text message, encodes it using nanopb, and sends it over UART.
 int send_text_message(uint32_t target_node, const char *text, size_t text_len)
 {
     // Build and send a text message

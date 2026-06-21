@@ -52,7 +52,6 @@ static meshtastic_FromRadio *rx_consume_byte(uart_comms_t *comms, uint8_t c)
     // If we see a new frame start while in the middle of a frame,
     // restart the frame capture (this handles lost sync)
     if (c == MESHTASTIC_START1 && comms->rx_state != RX_WAIT_START1) {
-        // Only restart if we've been in this state for a while
         if (comms->rx_state == RX_READ_PAYLOAD && 
             (comms->rx_pos - 4) > 10) {
             // We're mid-frame and saw a new start - probably lost sync

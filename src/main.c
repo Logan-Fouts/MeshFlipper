@@ -100,17 +100,14 @@ int main(void)
 
     printk("MeshFlipper ready!\n");
     
-    // Give some time for UART to stabilize
-    k_sleep(K_SECONDS(1));
-    
     // Wait for my node info
     bool got_info = message_processor_wait_for_my_node_info(WAIT_FOR_NODE_INFO_TIMEOUT_MS);
     
     if (got_info) {
-        printk("✅ My node info received!\n");
+        printk("My node info received!\n");
         print_my_node_info(&g_node_list.my_info);
     } else {
-        printk("❌ Failed to get my node info\n");
+        printk("Failed to get my node info\n");
     }
     
     print_my_node_info(&g_node_list.my_info);

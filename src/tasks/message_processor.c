@@ -131,6 +131,7 @@ int message_processor_start(void)
     return 0;
 }
 
+// Wait for my node info to be received, which indicates we've joined the mesh and can start processing messages. Returns true if we got the info, false if we timed out.
 bool message_processor_wait_for_my_node_info(int timeout_ms)
 {
     if (!g_node_list) return false;
@@ -154,6 +155,7 @@ bool message_processor_wait_for_my_node_info(int timeout_ms)
     }
 }
 
+// Retrieves the current message processing statistics.
 void message_processor_get_stats(uint32_t *processed_count, uint32_t *error_count)
 {
     if (processed_count) *processed_count = g_stats.messages_processed;
