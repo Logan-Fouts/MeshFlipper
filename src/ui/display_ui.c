@@ -22,7 +22,6 @@ static const char *const quick_replies[] = {
     "Bye",
 };
 
-// Current selection state for inbox
 static int current_display_index = 0;
 
 /* Forward declarations */
@@ -50,7 +49,6 @@ static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t targ
 static bool is_broadcast_compose_selected(display_ui_t *ui);
 static void draw_message_popup(display_ui_t *ui, const struct message *msg);
 
-/* Helper: Get node name */
 static const char* get_node_name(const struct nodeHistory *node_hist, int32_t node_num)
 {
     if (node_hist == NULL) {
@@ -71,13 +69,11 @@ static const char* get_node_name(const struct nodeHistory *node_hist, int32_t no
     return "Unknown";
 }
 
-/* Helper: Check if message is broadcast */
 static bool is_broadcast_message(const struct message *msg)
 {
     return msg != NULL && (uint32_t)msg->to == 0xFFFFFFFFu;
 }
 
-/* Helper: Build wrapped text preview */
 static void build_wrapped_preview(char *out, size_t out_size, const char *text,
                                   size_t chars_per_line, size_t max_lines)
 {
@@ -121,7 +117,6 @@ static void build_wrapped_preview(char *out, size_t out_size, const char *text,
     }
 }
 
-/* Helper: Get message at index */
 static bool history_get_message_at(struct messageHistory *hist, int idx,
                                    int32_t *out_id, int32_t *out_from_num, 
                                    int32_t *out_to_num, const char **out_text)
@@ -137,7 +132,6 @@ static bool history_get_message_at(struct messageHistory *hist, int idx,
     return true;
 }
 
-/* Helper: Get thread peer for message */
 static bool get_thread_peer_for_message(const struct messageHistory *hist, int idx,
                                         uint32_t my_node_num, int32_t *out_peer,
                                         bool *out_outgoing)
@@ -175,7 +169,6 @@ static bool get_thread_peer_for_message(const struct messageHistory *hist, int i
     return true;
 }
 
-/* Build inbox indices */
 static int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MESSAGES])
 {
     struct messageHistory *hist = ui->message_history;
@@ -236,7 +229,6 @@ static int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MES
     return count;
 }
 
-/* Inbox selection helpers */
 static int inbox_selected_position(const int *inbox_indices, int inbox_count)
 {
     for (int i = 0; i < inbox_count; i++) {
@@ -266,7 +258,6 @@ static int inbox_start_index(int selected_pos, int inbox_count)
     return start;
 }
 
-/* Add sent message to UI */
 static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t target_node)
 {
     printk("UI: Adding sent message to thread/inbox\n");
@@ -328,7 +319,6 @@ static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t targ
     printk("UI: Sent message added successfully\n");
 }
 
-/* Draw message popup */
 static void draw_message_popup(display_ui_t *ui, const struct message *msg)
 {
     if (!msg || !ui) return;
@@ -363,7 +353,6 @@ static void draw_message_popup(display_ui_t *ui, const struct message *msg)
     display_driver_draw_text(&ui->driver, 18, 90, 1, true, popup_text);
 }
 
-/* Rebuild thread snapshot */
 static void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num)
 {
     ui->thread_snapshot_count = 0;
@@ -393,7 +382,6 @@ static void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num)
     }
 }
 
-/* Rebuild broadcast thread snapshot */
 static void rebuild_broadcast_thread_snapshot(display_ui_t *ui)
 {
     ui->thread_snapshot_count = 0;
@@ -413,7 +401,6 @@ static void rebuild_broadcast_thread_snapshot(display_ui_t *ui)
     }
 }
 
-/* Rebuild node picker snapshot */
 static void rebuild_node_picker_snapshot(display_ui_t *ui)
 {
     ui->node_snapshot_count = 0;
@@ -477,7 +464,6 @@ static void rebuild_node_picker_snapshot(display_ui_t *ui)
     }
 }
 
-/* Render inbox screen */
 static int render_inbox(display_ui_t *ui)
 {
     display_driver_clear(&ui->driver);
@@ -579,7 +565,6 @@ static int render_inbox(display_ui_t *ui)
     return display_driver_refresh(&ui->driver);
 }
 
-/* Render thread screen */
 static int render_thread_screen(display_ui_t *ui)
 {
     display_driver_clear(&ui->driver);
@@ -662,7 +647,6 @@ static int render_thread_screen(display_ui_t *ui)
     return display_driver_refresh(&ui->driver);
 }
 
-/* Render node picker */
 static int render_node_picker(display_ui_t *ui)
 {
     rebuild_node_picker_snapshot(ui);
@@ -748,7 +732,6 @@ static int render_node_picker(display_ui_t *ui)
     return display_driver_refresh(&ui->driver);
 }
 
-/* Render compose screen */
 static void render_compose(display_ui_t *ui)
 {
     display_driver_clear(&ui->driver);
@@ -786,7 +769,6 @@ static void render_compose(display_ui_t *ui)
     display_driver_refresh(&ui->driver);
 }
 
-/* Resolve thread target */
 static bool resolve_thread_target(display_ui_t *ui, int32_t *out_node_num)
 {
     if (out_node_num == NULL || ui->node_history == NULL || !ui->node_history->my_info.valid) {
@@ -820,7 +802,6 @@ static bool resolve_thread_target(display_ui_t *ui, int32_t *out_node_num)
     return true;
 }
 
-/* Check if broadcast compose is selected */
 static bool is_broadcast_compose_selected(display_ui_t *ui)
 {
     int inbox_indices[MAX_VISIBLE_MESSAGES];
@@ -834,7 +815,6 @@ static bool is_broadcast_compose_selected(display_ui_t *ui)
     return selected_raw == INBOX_BROADCAST_COMPOSE_INDEX;
 }
 
-/* Public API: Initialize */
 int display_ui_init(display_ui_t *ui, const display_hal_config_t *hal_config,
                     struct messageHistory *msg_hist, struct nodeHistory *node_hist)
 {
@@ -880,7 +860,6 @@ int display_ui_deinit(display_ui_t *ui)
     return display_driver_deinit(&ui->driver);
 }
 
-/* Public API: Show boot screen */
 int display_ui_show_boot(display_ui_t *ui)
 {
     if (!ui || !ui->initialized) return -EINVAL;
@@ -892,7 +871,6 @@ int display_ui_show_boot(display_ui_t *ui)
     return display_driver_refresh(&ui->driver);
 }
 
-/* Public API: Show inbox */
 int display_ui_show_inbox(display_ui_t *ui)
 {
     if (!ui || !ui->initialized) return -EINVAL;
@@ -900,7 +878,6 @@ int display_ui_show_inbox(display_ui_t *ui)
     return render_inbox(ui);
 }
 
-/* Public API: Show thread */
 int display_ui_show_thread(display_ui_t *ui, int32_t peer_node, bool broadcast)
 {
     if (!ui || !ui->initialized) return -EINVAL;
@@ -921,7 +898,6 @@ int display_ui_show_thread(display_ui_t *ui, int32_t peer_node, bool broadcast)
     return render_thread_screen(ui);
 }
 
-/* Public API: Show compose */
 int display_ui_show_compose(display_ui_t *ui, int32_t target_node, bool broadcast)
 {
     if (!ui || !ui->initialized) return -EINVAL;
@@ -933,7 +909,6 @@ int display_ui_show_compose(display_ui_t *ui, int32_t target_node, bool broadcas
     return 0;
 }
 
-/* Public API: Show node picker */
 int display_ui_show_node_picker(display_ui_t *ui)
 {
     if (!ui || !ui->initialized) return -EINVAL;
@@ -942,7 +917,6 @@ int display_ui_show_node_picker(display_ui_t *ui)
     return render_node_picker(ui);
 }
 
-/* Public API: Show popup */
 int display_ui_show_popup(display_ui_t *ui, const char *title, const char *message)
 {
     if (!ui || !ui->initialized) return -EINVAL;
@@ -958,7 +932,6 @@ int display_ui_show_popup(display_ui_t *ui, const char *title, const char *messa
     return display_driver_refresh(&ui->driver);
 }
 
-/* Public API: Refresh UI */
 int display_ui_refresh(display_ui_t *ui)
 {
     if (!ui || !ui->initialized) return -EINVAL;
@@ -980,7 +953,6 @@ int display_ui_refresh(display_ui_t *ui)
     }
 }
 
-/* Public API: Handle actions */
 int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
 {
     printk("HANDLE ACTION: %d\n", action);
@@ -1188,7 +1160,6 @@ int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
     return 0;
 }
 
-/* Public API: Take outgoing message */
 bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgoing)
 {
     if (ui == NULL || outgoing == NULL || !ui->pending.valid) return false;
@@ -1198,7 +1169,6 @@ bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgo
     return true;
 }
 
-/* Public API: Test pattern */
 int display_ui_test_pattern(display_ui_t *ui)
 {
     printk("DISPLAY_TEST: Drawing test pattern...\n");

@@ -50,9 +50,7 @@ static void on_button_press(uint8_t pin, void *user_data)
     int ret = display_ui_handle_action(ctx->display_ui, action);
     if (ret < 0) {
         printk("UI action failed: %d\n", ret);
-    } else {
-        printk("UI action completed\n");
-    }
+    } 
 }
 
 static void on_button_long_press(uint8_t pin, void *user_data)
@@ -63,7 +61,6 @@ static void on_button_long_press(uint8_t pin, void *user_data)
     printk("BUTTON LONG PRESS: pin %d\n", pin);
     
     if (pin == BUTTON_SECONDARY_PIN) {
-        printk("  Action: HOME\n");
         int ret = display_ui_handle_action(ctx->display_ui, SCREEN_UI_ACTION_HOME);
         if (ret < 0) {
             printk("Home action failed: %d\n", ret);
