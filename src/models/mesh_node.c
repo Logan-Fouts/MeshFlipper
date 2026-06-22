@@ -1,7 +1,8 @@
-#include <zephyr/kernel.h>
-#include "models/node.h"
 #include <stdio.h>
 #include <string.h>
+#include <zephyr/kernel.h>
+
+#include "models/mesh_node.h"
 
 // Helper function to safely copy strings from protobuf fields, ensuring null-termination and preventing buffer overflows.
 static void copy_proto_string(char *dest, size_t dest_size, const char *src)
@@ -41,7 +42,7 @@ struct node_info parse_node(const meshtastic_FromRadio *node_packet)
     struct node_info n = {0};
 
     if (node_packet != NULL) {
-        if (node_packet->which_payload_variant == meshtastic_FromRadio_node_info_tag) {
+        if (node_packet->which_payload_variant == meshtastic_FromRadio_node_info_tag) { // This is the typical node info packet we get for other nodes in the mesh.
             n.valid = true;
             n.num = node_packet->node_info.num;
             n.last_heard = node_packet->node_info.last_heard;
@@ -56,7 +57,7 @@ struct node_info parse_node(const meshtastic_FromRadio *node_packet)
                 copy_proto_string(n.long_name, sizeof(n.long_name), node_packet->node_info.user.long_name);
                 copy_proto_string(n.short_name, sizeof(n.short_name), node_packet->node_info.user.short_name);
             }
-        } else if (node_packet->which_payload_variant == meshtastic_FromRadio_my_info_tag) {
+        } else if (node_packet->which_payload_variant == meshtastic_FromRadio_my_info_tag) { // This is the packet we get that contains info about our own node.
             n.valid = true;
             n.is_my_info = true;
             n.num = node_packet->my_info.my_node_num;

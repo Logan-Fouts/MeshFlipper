@@ -1,10 +1,8 @@
 #include <zephyr/kernel.h>
-#include "models/message.h"
-
+#include "models/mesh_message.h"
 
 struct message parse_message(const meshtastic_FromRadio *msg_packet)
 {
-    // TODO: Implement actual parsing logic to populate the message structure based on the incoming packet
     struct message msg = {
         .id = 0,
         .from = 0,
@@ -24,6 +22,7 @@ struct message parse_message(const meshtastic_FromRadio *msg_packet)
             copy_len = sizeof(msg.text) - 1;
         }
 
+        // Copy into message text field and ensure null termination
         memcpy(msg.text, msg_packet->packet.decoded.payload.bytes, copy_len);
         msg.text[copy_len] = '\0';
     }
@@ -75,7 +74,6 @@ void update_message_history(struct messageHistory *mes_history, const meshtastic
 
 
 // Returns a dynamically allocated array of pointers to messages sent to the specified node, and sets out_count to the number of messages found.
-// The caller is responsible for freeing the returned array.
 struct message** find_my_messages_sent_to_node(struct messageHistory *mes_history, int node_num, size_t *out_count)
 {
     if (mes_history == NULL || mes_history->count == 0 || out_count == NULL) {
@@ -105,26 +103,6 @@ struct message** find_my_messages_sent_to_node(struct messageHistory *mes_histor
     return results;
 }
 
-void print_message_history(struct messageHistory *mes_history)
-{
-    if (mes_history->count == 0) {
-        return;
-    }
-
-    for (int i = 0; i < mes_history->count; i++) {
-        struct message msg_copy;
-
-        //Breifly aquire lock before accessing specific mesage from history
-        k_spinlock_key_t key = k_spin_lock(&mes_history->lock);
-        msg_copy = mes_history->messages[i];
-        k_spin_unlock(&mes_history->lock, key);
-
-        print_message(&msg_copy);
-    }
-}
-
-
-
 struct message* find_message_by_id(struct messageHistory *mes_history, int id)
 {
     if (mes_history == NULL || mes_history->count == 0) {
@@ -146,3 +124,23 @@ struct message* find_message_by_id(struct messageHistory *mes_history, int id)
 
     return NULL;
 }
+
+void print_message_history(struct messageHistory *mes_history)
+{
+    if (mes_history->count == 0) {
+        return;
+    }
+
+    for (int i = 0; i < mes_history->count; i++) {
+        struct message msg_copy;
+
+        //Breifly aquire lock before accessing specific mesage from history
+        k_spinlock_key_t key = k_spin_lock(&mes_history->lock);
+        msg_copy = mes_history->messages[i];
+        k_spin_unlock(&mes_history->lock, key);
+
+        print_message(&msg_copy);
+    }
+}
+
+

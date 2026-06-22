@@ -1,7 +1,8 @@
-#include "communication/ring_buffer.h"
+#include "models/ring_buffer.h"
 #include <string.h>
 
 
+// Initializes the ring buffer, setting indices to 0 and initializing the semaphore.
 void ring_buffer_init(ring_buffer_t *rb)
 {
     if (rb == NULL) {
@@ -49,11 +50,12 @@ bool ring_buffer_get(ring_buffer_t *rb, meshtastic_FromRadio *msg)
         return false;
     }
     
+    // Check if buffer is empty
     if (rb->read_idx == rb->write_idx) {
         return false;
     }
     
-    // Copy message from buffer
+    // Copy message from buffer into provided pointer
     memcpy(msg, &rb->buffer[rb->read_idx], sizeof(meshtastic_FromRadio));
     
     // Update read index

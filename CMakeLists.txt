@@ -35,14 +35,20 @@ target_sources(
     app
     PRIVATE
     src/main.c
-    src/models/node.c
-    src/models/message.c
-    src/communication/manage_pb.c
-    src/communication/uart_comms.c
-    src/communication/ring_buffer.c
-    src/ui/screen_ui.c
-    src/display/weact_epd154.c
-    src/ui/buttons.c
+    src/models/ring_buffer.c
+    src/models/mesh_message.c
+    src/models/mesh_node.c
+    src/hardware/uart_hal.c
+    src/comms/uart_comms.c
+    src/comms/protobuf_handler.c
+    src/tasks/message_processor.c
+    src/hardware/button_hal.c
+    src/hardware/button.c
+    src/ui/ui_button_handler.c
+    src/hardware/display_hal.c
+    src/hardware/display_hal_weact.c
+    src/middleware/display_driver.c
+    src/ui/display_ui.c
 )
 
 target_include_directories(

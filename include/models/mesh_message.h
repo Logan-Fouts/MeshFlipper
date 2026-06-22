@@ -1,17 +1,16 @@
 #ifndef MESSAGE_H
 #define MESSAGE_H
 
-#include <zephyr/kernel.h>
 #include <zephyr/spinlock.h>
 #include "meshtastic/mesh.pb.h"
 
-#define MAX_MESSAGE_HISTORY 300
+#include "config/common.h"
 
 struct message {
     int id;
     int from;
     int to;
-    char text[256]; // Default max meshtastic message length
+    char text[MAX_MESSAGE_TEXT_LENGTH];
 };
 
 // Function to parse the incoming message and populate the message structure
@@ -30,11 +29,8 @@ struct messageHistory {
 };
 
 void update_message_history(struct messageHistory *mes_history, const meshtastic_FromRadio *msg_packet);
-
 void print_message_history(struct messageHistory *mes_history);
-
 struct message* find_message_by_id(struct messageHistory *mes_history, int id);
-
 struct message** find_my_messages_sent_to_node(struct messageHistory *mes_history, int node_num, size_t *out_count);
 
 #endif
