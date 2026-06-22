@@ -42,6 +42,13 @@ target_sources(
     src/comms/uart_comms.c
     src/comms/protobuf_handler.c
     src/tasks/message_processor.c
+    src/hardware/button_hal.c
+    src/hardware/button.c
+    src/ui/ui_button_handler.c
+    src/hardware/display_hal.c
+    src/hardware/display_hal_weact.c
+    src/middleware/display_driver.c
+    src/ui/display_ui.c
 )
 
 target_include_directories(

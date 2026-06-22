@@ -3,18 +3,18 @@
 #include "models/mesh_node.h"
 #include "models/ring_buffer.h"
 #include "comms/protobuf_handler.h"
+#include "ui/display_ui.h"
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <string.h>
 #include <errno.h>
 
-// =============
-// STATIC DATA
-// =============
+
 
 static ring_buffer_t *g_rx_queue = NULL;
 static struct messageHistory *g_message_history = NULL;
 static struct nodeHistory *g_node_list = NULL;
+static display_ui_t *g_display_ui = NULL;
 
 K_THREAD_STACK_DEFINE(g_msg_task_stack, MSG_TASK_STACK_SIZE);
 static struct k_thread g_msg_task_thread;
@@ -25,23 +25,15 @@ static struct {
     uint32_t ui_updates;
 } g_stats = {0};
 
-// ==================
-// STATIC FUNCTIONS
-// ==================
+
 
 // Takes a message from the ring buffer and updates the message history and node history as appropriate.
 static void process_message(const meshtastic_FromRadio *msg)
 {
     if (!msg) return;
     
-    
     // Handle queue status messages
     if (msg->which_payload_variant == meshtastic_FromRadio_queueStatus_tag) {
-        printk("QueueStatus: res=%d free=%u/%u mesh_packet_id=%u\n",
-               (int)msg->queueStatus.res,
-               (unsigned int)msg->queueStatus.free,
-               (unsigned int)msg->queueStatus.maxlen,
-               (unsigned int)msg->queueStatus.mesh_packet_id);
         return;
     }
     
@@ -50,9 +42,6 @@ static void process_message(const meshtastic_FromRadio *msg)
         msg->which_payload_variant == meshtastic_FromRadio_node_info_tag) {
         update_node_history(g_node_list, msg);
         
-        if (msg->which_payload_variant == meshtastic_FromRadio_my_info_tag) {
-            printk("My info received! Node num: %u\n", (unsigned int)g_node_list->my_info.num);
-        }
         return;
     }
     
@@ -61,20 +50,27 @@ static void process_message(const meshtastic_FromRadio *msg)
         msg->packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
         msg->packet.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
         
-        // Ignore messages from myself
+        // Ignore messages from myself (they're already added to history)
         if (g_node_list->my_info.valid && 
             msg->packet.from == g_node_list->my_info.num) {
             return;
         }
         
+        // Update message history
         update_message_history(g_message_history, msg);
         g_stats.messages_processed++;
+        
+        // Get the parsed message
+        struct message parsed_msg = parse_message(msg);
+        
+        // Notify the UI about the new message
+        if (g_display_ui != NULL && g_display_ui->initialized) {
+            display_ui_notify_new_message(g_display_ui, &parsed_msg);
+        }
     }
 }
 
-// ================
-// PUBLIC FUNCTIONS
-// ================
+
 
 // Stores references to the ring buffer, message history, and node list for use by the message processor thread.
 int message_processor_init(ring_buffer_t *rx_queue,
@@ -88,23 +84,28 @@ int message_processor_init(ring_buffer_t *rx_queue,
     g_rx_queue = rx_queue;
     g_message_history = message_history;
     g_node_list = node_list;
+    g_display_ui = NULL;  // Will be set later
     memset(&g_stats, 0, sizeof(g_stats));
     
     return 0;
 }
 
-static void message_processor_thread_entry(void *p1, void *p2, void *p3) // Suppress unused parameter warnings
+// Sets the display UI reference for the message processor to notify about new messages.
+void message_processor_set_display_ui(struct display_ui_t *ui)
+{
+    g_display_ui = (display_ui_t *)ui;
+}
+
+// The thread entry function for processing incoming messages from the ring buffer ran by the message processor thread.
+// Waits for messages to be available in the ring buffer, then processes them one by one.
+static void message_processor_thread_entry(void *p1, void *p2, void *p3)
 {
     (void)p1; (void)p2; (void)p3;
     
     meshtastic_FromRadio msg;
     
-    printk("Message processor thread started\n");
-    
     while (1) {
-        // Wait for a message to be available in the ring buffer
         if (ring_buffer_wait(g_rx_queue, K_FOREVER)) {
-            // Process all available messages
             while (ring_buffer_get(g_rx_queue, &msg)) {
                 process_message(&msg);
             }
@@ -120,34 +121,30 @@ int message_processor_start(void)
         return -EINVAL;
     }
     
-    // Create the thread
     k_thread_create(&g_msg_task_thread, g_msg_task_stack,
                     K_THREAD_STACK_SIZEOF(g_msg_task_stack),
                     (k_thread_entry_t)message_processor_thread_entry,
                     NULL, NULL, NULL,
                     K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
     
-    printk("Message processor thread created\n");
     return 0;
 }
 
-// Wait for my node info to be received, which indicates we've joined the mesh and can start processing messages. Returns true if we got the info, false if we timed out.
+// Wait for my node info to be received, which indicates we've got access to the heltec and thus the mesh and can start processing messages.
 bool message_processor_wait_for_my_node_info(int timeout_ms)
 {
     if (!g_node_list) return false;
     
     int elapsed_ms = 0;
-    
-    printk("Waiting for my node info...\n");
+    int wait_interval_ms = 2000; // Send want_config every 2 seconds until we get my node info or timeout
     
     while (!g_node_list->my_info.valid && elapsed_ms < timeout_ms) {
         send_want_config();
-        k_sleep(K_SECONDS(2));
-        elapsed_ms += 2000;
+        k_sleep(K_MSEC(wait_interval_ms));
+        elapsed_ms += wait_interval_ms;
     }
     
     if (g_node_list->my_info.valid) {
-        printk("My node info received! Node num: %u\n", (unsigned int)g_node_list->my_info.num);
         return true;
     } else {
         printk("Timeout waiting for my node info\n");
