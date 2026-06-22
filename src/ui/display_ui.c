@@ -1228,7 +1228,7 @@ int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
     return 0;
 }
 
-// Take outgoing message
+// Take outgoing message from ui pending slot and mark it as not pending anymore.
 bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgoing)
 {
     if (ui == NULL || outgoing == NULL || !ui->pending.valid) return false;

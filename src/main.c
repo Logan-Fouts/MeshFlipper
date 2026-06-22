@@ -13,10 +13,9 @@
 #include "ui/display_ui.h"
 #include "ui/ui_button_handler.h"
 
-// ==================
-// GLOBAL INSTANCES
-// ==================
 
+
+// Global instances
 struct messageHistory g_message_history = { .count = 0 };
 struct nodeHistory g_node_list = { .count = 0 };
 ring_buffer_t g_msg_ring_buffer;
@@ -25,9 +24,7 @@ ring_buffer_t g_msg_ring_buffer;
 static display_ui_t g_display_ui;
 static ui_button_context_t g_button_ctx;
 
-// ==================
-// SETUP FUNCTIONS
-// ==================
+
 
 static int setup_uart_hal(void) 
 {
@@ -122,15 +119,20 @@ static int setup(void)
 
     if (setup_display() != 0) {
         printk("Display setup failed - continuing without display\n");
+        return -1;
     }
 
     if (setup_buttons() != 0) {
         printk("Button setup failed - continuing without buttons\n");
+        return -1;
     }
 
     return 0;
 }
 
+
+
+// Main loop helper checks for outgoing messages from the UI, and sends them when they appear.
 static void check_for_outgoing_messages(void)
 {
     struct screen_ui_outgoing outgoing;
@@ -146,6 +148,11 @@ static void check_for_outgoing_messages(void)
     }
 }
 
+/*
+    Main loop helper checks for new messages and updates the display.
+    Checks that the latest message in the message history is new by comparing its ID to the last handled incoming message ID stored in the display UI state.
+    If a new message is detected and we're not in a thread or compose screen, refresh the inbox display and update the last handled incoming message ID.
+*/
 static void check_new_messages(void)
 {
     if (g_display_ui.initialized && g_message_history.count > 0)
@@ -153,7 +160,6 @@ static void check_new_messages(void)
         int last_idx = g_message_history.count - 1;
         if (g_message_history.messages[last_idx].id != g_display_ui.last_handled_incoming_id)
         {
-            // New message received - update display
             if (!g_display_ui.thread_active && !g_display_ui.compose_active)
             {
                 display_ui_refresh(&g_display_ui);
@@ -163,12 +169,10 @@ static void check_new_messages(void)
     }
 }
 
-// ========
-// MAIN
-// ========
-
 int main(void)
 {
+    int main_poll_interval_ms = 50;
+
     if (setup() != 0) {
         printk("Setup failed\n");
         return -1;
@@ -178,21 +182,22 @@ int main(void)
     
     if (!message_processor_wait_for_my_node_info(WAIT_FOR_NODE_INFO_TIMEOUT_MS)) {
         printk("Failed to get my node info\n");
+        return -1;
     } 
 
-    // Show inbox after getting node info
-    if (g_display_ui.initialized) {
-        display_ui_show_inbox(&g_display_ui);
-    } else {
-        printk("Display not initialized!\n");
+    if (!g_display_ui.initialized){
+        printk("Display UI not initialized\n");
+        return -1;
     }
 
-    // Main loop - Check for outgoing messages, and refresh display on new messages
+    display_ui_show_inbox(&g_display_ui);
+
+    // Main loop
     while (1) {
         check_for_outgoing_messages();
         check_new_messages();
 
-        k_sleep(K_MSEC(50));
+        k_sleep(K_MSEC(main_poll_interval_ms));
     }
     
     return 0;

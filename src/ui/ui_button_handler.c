@@ -67,7 +67,7 @@ static void on_button_long_press(uint8_t pin, void *user_data)
     }
 }
 
-// Button processing thread entry
+// Button processing thread entry, waits for button events and processes them
 static void button_processor_thread_entry(void *p1, void *p2, void *p3)
 {
     (void)p1; (void)p2; (void)p3;
@@ -113,6 +113,7 @@ int ui_button_handler_init(ui_button_context_t *ctx, display_ui_t *display_ui)
         .on_long_press = on_button_long_press,
     };
     
+    // Initialize each button with its config and callbacks
     for (int i = 0; i < NUM_BUTTONS; i++) {
         int ret = button_init(&ctx->buttons[i], &hal_configs[i]);
         if (ret < 0) {
@@ -120,6 +121,7 @@ int ui_button_handler_init(ui_button_context_t *ctx, display_ui_t *display_ui)
             return ret;
         }
         
+        // Set callbacks and user data for each button
         ctx->buttons[i].callbacks = callbacks;
         ctx->buttons[i].user_data = ctx;
         ctx->buttons[i].long_press_threshold_ms = LONG_PRESS_DURATION_MS;

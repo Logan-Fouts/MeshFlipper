@@ -4,10 +4,7 @@
 // Returns the display configuration for the WeAct EPD module based on devicetree.
 display_hal_config_t weact_display_get_config(void)
 {
-    const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(spi0));
-    const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-    
-    // Ensure that all the necessary constants are defined
+    // Ensure that all the necessary constants are defined for WeAct EPD module.
     #ifndef WEACT_CS_PIN
     #error "WEACT_CS_PIN must be defined"
     #endif
@@ -35,6 +32,9 @@ display_hal_config_t weact_display_get_config(void)
     #ifndef EPD_HEIGHT
     #error "EPD_HEIGHT must be defined"
     #endif
+
+    const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(spi0));
+    const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 
     display_hal_config_t config = {
         .spi_dev = spi_dev,

@@ -86,6 +86,7 @@ static bool get_glyph(char ch, uint8_t glyph[5])
     }
 }
 
+// Basic framebuffer driver that uses the display HAL to manage the framebuffer and drawing operations.
 int display_driver_init(display_driver_t *drv, const display_hal_config_t *hal_config)
 {
     if (!drv || !hal_config) return -EINVAL;

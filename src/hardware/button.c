@@ -1,12 +1,12 @@
 #include "hardware/button.h"
 
 
+// Initializes a button with the given HAL config and default settings
 int button_init(button_t *btn, const button_hal_config_t *hal_config) {
     if (!btn || !hal_config) {
         printk("Invalid parameters\n");
         return -EINVAL;
     }
-    
     
     btn->hal_config = *hal_config;
     btn->state = BUTTON_IDLE;
@@ -36,7 +36,10 @@ int button_init(button_t *btn, const button_hal_config_t *hal_config) {
 }
 
 /*
+    Updates the button state based on current GPIO level and timing.
+    It also handles event detection and callback invocation for press, release, and long press events.
     This function should be polled periodically to update the button state and handle events
+
     Events:
         - Press: Detected on falling edge (HIGH -> LOW)
         - Release: Detected on rising edge (LOW -> HIGH)

@@ -1,9 +1,8 @@
 #include "hardware/display_hal.h"
-#include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <string.h>
 
-LOG_MODULE_REGISTER(display_hal, LOG_LEVEL_DBG);
+
 
 static int display_hal_write_raw(const display_hal_config_t *config, const uint8_t *data, size_t len)
 {
@@ -47,7 +46,7 @@ int display_hal_wait_busy(const display_hal_config_t *config, int timeout_ms)
     int elapsed = 0;
     while (gpio_pin_get_dt(&config->busy_pin) > 0) {
         if (elapsed >= timeout_ms) {
-            LOG_ERR("Busy timeout after %d ms", timeout_ms);
+            printk("Busy timeout after %d ms\n", timeout_ms);
             return -ETIMEDOUT;
         }
         k_sleep(K_MSEC(10));
@@ -72,17 +71,14 @@ int display_hal_set_ram_pointer(const display_hal_config_t *config)
 
 int display_hal_refresh(const display_hal_config_t *config)
 {
-    // Same as working code's epd_refresh_framebuffer
     int ret = display_hal_set_ram_pointer(config);
     if (ret < 0) return ret;
 
     ret = display_hal_write_cmd(config, 0x24);
     if (ret < 0) return ret;
-    // Data is written separately by the driver
 
     ret = display_hal_write_cmd(config, 0x26);
     if (ret < 0) return ret;
-    // Data is written separately by the driver
 
     ret = display_hal_write_cmd(config, 0x22);
     if (ret < 0) return ret;
@@ -95,12 +91,11 @@ int display_hal_refresh(const display_hal_config_t *config)
     return display_hal_wait_busy(config, 5000);
 }
 
+// Initialize display with sequence from weact studio driver and pin setup.
 int display_hal_init(const display_hal_config_t *config)
 {
-    LOG_INF("Display init starting...");
-    
     if (!config) {
-        LOG_ERR("Config is NULL");
+        printk("Display config is NULL\n");
         return -EINVAL;
     }
     
@@ -109,7 +104,7 @@ int display_hal_init(const display_hal_config_t *config)
         !device_is_ready(config->dc_pin.port) ||
         !device_is_ready(config->rst_pin.port) ||
         !device_is_ready(config->busy_pin.port)) {
-        LOG_ERR("SPI/GPIO not ready");
+        printk("SPI/GPIO not ready\n");
         return -ENODEV;
     }
 
@@ -129,7 +124,7 @@ int display_hal_init(const display_hal_config_t *config)
 
     ret = display_hal_wait_busy(config, 3000);
     if (ret < 0) {
-        LOG_ERR("Busy timeout before init");
+        printk("Busy timeout before init\n");
         return ret;
     }
 
@@ -184,7 +179,6 @@ int display_hal_init(const display_hal_config_t *config)
     ret = display_hal_set_ram_pointer(config);
     if (ret < 0) return ret;
 
-    LOG_INF("Display init complete");
     return 0;
 }
 

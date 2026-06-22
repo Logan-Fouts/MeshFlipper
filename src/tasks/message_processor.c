@@ -9,9 +9,7 @@
 #include <string.h>
 #include <errno.h>
 
-// =============
-// STATIC DATA
-// =============
+
 
 static ring_buffer_t *g_rx_queue = NULL;
 static struct messageHistory *g_message_history = NULL;
@@ -27,9 +25,7 @@ static struct {
     uint32_t ui_updates;
 } g_stats = {0};
 
-// ==================
-// STATIC FUNCTIONS
-// ==================
+
 
 // Takes a message from the ring buffer and updates the message history and node history as appropriate.
 static void process_message(const meshtastic_FromRadio *msg)
@@ -74,9 +70,7 @@ static void process_message(const meshtastic_FromRadio *msg)
     }
 }
 
-// ================
-// PUBLIC FUNCTIONS
-// ================
+
 
 // Stores references to the ring buffer, message history, and node list for use by the message processor thread.
 int message_processor_init(ring_buffer_t *rx_queue,
@@ -102,6 +96,8 @@ void message_processor_set_display_ui(struct display_ui_t *ui)
     g_display_ui = (display_ui_t *)ui;
 }
 
+// The thread entry function for processing incoming messages from the ring buffer ran by the message processor thread.
+// Waits for messages to be available in the ring buffer, then processes them one by one.
 static void message_processor_thread_entry(void *p1, void *p2, void *p3)
 {
     (void)p1; (void)p2; (void)p3;
@@ -134,17 +130,18 @@ int message_processor_start(void)
     return 0;
 }
 
-// Wait for my node info to be received, which indicates we've joined the mesh and can start processing messages.
+// Wait for my node info to be received, which indicates we've got access to the heltec and thus the mesh and can start processing messages.
 bool message_processor_wait_for_my_node_info(int timeout_ms)
 {
     if (!g_node_list) return false;
     
     int elapsed_ms = 0;
+    int wait_interval_ms = 2000; // Send want_config every 2 seconds until we get my node info or timeout
     
     while (!g_node_list->my_info.valid && elapsed_ms < timeout_ms) {
         send_want_config();
-        k_sleep(K_SECONDS(2));
-        elapsed_ms += 2000;
+        k_sleep(K_MSEC(wait_interval_ms));
+        elapsed_ms += wait_interval_ms;
     }
     
     if (g_node_list->my_info.valid) {

@@ -29,6 +29,18 @@ typedef struct {
     button_long_press_callback_t on_long_press;
 } button_callbacks_t;
 
+/*
+    Defines the button structure that holds the state and configuration for each button.
+    params:
+        - hal_config: The hardware abstraction layer configuration for the button (pin, GPIO device)
+        - state: Current state of the button (idle, pressed, long press detected, released)
+        - last_level: Last read level of the GPIO pin (high or low)
+        - press_start_time: Timestamp when the button was pressed (used for long press detection)
+        - long_press_handled: Flag to indicate if the long press event has been handled
+        - long_press_threshold_ms: Duration in milliseconds to consider a press as a long press
+        - callbacks: Struct containing function pointers for press, release, and long press callbacks
+        - user_data: Pointer to user data that will be passed to callbacks
+*/
 typedef struct {
     button_hal_config_t hal_config;
     button_state_t state;

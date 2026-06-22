@@ -6,6 +6,13 @@
 
 #define NUM_BUTTONS 4
 
+/*
+    Defines the context for the UI button handler, including button states and a reference to the display UI for handling actions.
+    params:
+        - buttons: Array of button_t structures representing each button and its state
+        - display_ui: Pointer to the display_ui_t instance for invoking UI actions based on button presses
+        - initialized: Flag to indicate if the button handler has been initialized
+*/
 typedef struct {
     button_t buttons[NUM_BUTTONS];
     display_ui_t *display_ui;

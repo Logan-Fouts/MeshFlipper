@@ -12,6 +12,19 @@
 #define EPD_HEIGHT 200
 #define EPD_BUF_SIZE ((EPD_WIDTH * EPD_HEIGHT) / 8)
 
+/*
+    Display HAL configuration structure. This will be used to initialize the display and perform operations on it.
+
+    params:
+    - spi_dev: The SPI device to which the display is connected.
+    - cs_pin: GPIO specification for the Chip Select pin.
+    - dc_pin: GPIO specification for the Data/Command pin.
+    - rst_pin: GPIO specification for the Reset pin.
+    - busy_pin: GPIO specification for the Busy pin.
+    - spi_config: SPI configuration parameters such as frequency and operation mode.
+    - width: Width of the display in pixels.
+    - height: Height of the display in pixels.
+*/
 typedef struct {
     const struct device *spi_dev;
     struct gpio_dt_spec cs_pin;
