@@ -1,21 +1,27 @@
 # MeshFlipper
-This will the micro controller side of the implmentation of the mesh flipper software.
-## What it is
-I intened to make a flip phone style meshtastic device that uses a micro controller for the ui/ux and a differnt meshtastic board for handling LoRa.
 
-### The Stack
-#### Hardware
-- Raspberry pi pico (ui/ux)
-- Heltec v3 (LoRa)
-- i2c eink display (probably, cause I have on hand)
-- Card keyboard (probably, need to buy)
-- Battery and other extranious things
-#### Software
-- Zephyr RTOS *if I can manage to learn it ;)*
-- UART to/from heltec v3
+This is the microcontroller side of the implementation for the MeshFlipper software. It aims to create a flip phone(or similar)-style Meshtastic device with a microcontroller handling the UI/UX and a different Meshtastic board for LoRa communication.
 
+## What It Is
 
----
-I really hope I manage to turn out a good product, this will be a great learning experience. If I begin to get a feel for the sofware side of things (zephyr), then I will reach out to my friends as PCBWay for some manufactuaring.
+I intend to build a device that combines the simplicity and functionality of a traditional flip phone or another similar bare bones phone with the advanced capabilities of a Meshtastic network. The microcontroller will manage the user interface, while another Meshtastic board will handle the LoRa communication and data processing.
 
-_**Star the repository to stick along and watch the progress**_
+## Stack
+
+### Hardware
+- **Raspberry Pi Pico (UI/UX)**
+- **Heltec v3 (LoRa)**
+- **I2C e-Ink Display**
+- **Joystick and/or other ui buttons** (tbd)
+- **Battery and Other Extraneous Components**
+
+## Goals
+
+- **Microcontroller UI/UX**: Develop a user-friendly interface using the Raspberry Pi Pico.
+- **LoRa Communication**: Implement efficient communication between the microcontroller and the Heltec v3 board using UART.
+- **Advanced Features**: Incorporate additional features like addint in other sensors and fleshing out the hardware.
+
+## Development Progress
+
+Feel free to explore the repository for the latest updates. If you find this project interesting or want to contribute, feel free to star it!
+I am just using this as an excuse to learn Zephyr RTOS :)
