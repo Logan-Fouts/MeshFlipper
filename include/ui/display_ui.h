@@ -15,24 +15,40 @@ enum screen_ui_action {
     SCREEN_UI_ACTION_HOME,
 };
 
+// Represents an outgoing message that the UI wants to send. The main loop will check for pending outgoing messages and send them.
 struct screen_ui_outgoing {
     bool valid;
     int32_t target_node;
     char text[96];
 };
 
+// A struct representing an entry in the thread view, which can be either an incoming or outgoing message.
 struct display_thread_entry {
     const char *text;
     bool is_outgoing;
     const char *sender_name;
 };
 
+// A struct representing an entry in the node picker view.
 struct display_node_entry {
     uint32_t node_num;
     const char *label;
     bool favorited;
 };
 
+/*
+    The main display UI struct. Manages the display driver and UI state.
+
+    non-intuitive params:
+        - thread_message_index: the index of the currently selected message in the active thread
+        - last_handled_incoming_id: the ID of the last incoming message that was handled
+        - thread_node_num: the node number of the peer in the active thread (0 for broadcast)
+        - pending: if valid, contains an outgoing message that the UI wants to send
+        - thread_snapshot: a snapshot of the messages in the currently active thread, used for rendering the thread screen without needing to access the message history while rendering
+        - node_snapshot: a snapshot of the nodes in the node history, used for rendering the node picker screen without needing to access the node history while rendering
+        - node_snapshot_labels: the labels for the nodes in the node snapshot
+        - node_snapshot_last_heard: the last heard timestamp for each node in the node snapshot, used for rendering the "last heard" info in the node picker
+*/
 typedef struct display_ui_t {
     display_driver_t driver;
     struct messageHistory *message_history;
@@ -71,7 +87,6 @@ int display_ui_show_compose(display_ui_t *ui, int32_t target_node, bool broadcas
 int display_ui_show_node_picker(display_ui_t *ui);
 int display_ui_show_popup(display_ui_t *ui, const char *title, const char *message);
 int display_ui_refresh(display_ui_t *ui);
-int display_ui_test_pattern(display_ui_t *ui);
 int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action);
 bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgoing);
 void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg);  // NEW

@@ -1,14 +1,41 @@
 #include "hardware/display_hal_weact.h"
 #include <zephyr/device.h>
-#include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(display_hal_weact, LOG_LEVEL_DBG);
-
+// Returns the display configuration for the WeAct EPD module based on devicetree.
 display_hal_config_t weact_display_get_config(void)
 {
     const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(spi0));
     const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
     
+    // Ensure that all the necessary constants are defined
+    #ifndef WEACT_CS_PIN
+    #error "WEACT_CS_PIN must be defined"
+    #endif
+
+    #ifndef WEACT_DC_PIN
+    #error "WEACT_DC_PIN must be defined"
+    #endif
+
+    #ifndef WEACT_RST_PIN
+    #error "WEACT_RST_PIN must be defined"
+    #endif
+
+    #ifndef WEACT_BUSY_PIN
+    #error "WEACT_BUSY_PIN must be defined"
+    #endif
+
+    #ifndef WEACT_SPI_FREQUENCY
+    #error "WEACT_SPI_FREQUENCY must be defined"
+    #endif
+
+    #ifndef EPD_WIDTH
+    #error "EPD_WIDTH must be defined"
+    #endif
+
+    #ifndef EPD_HEIGHT
+    #error "EPD_HEIGHT must be defined"
+    #endif
+
     display_hal_config_t config = {
         .spi_dev = spi_dev,
         .cs_pin = {

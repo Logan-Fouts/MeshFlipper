@@ -16,7 +16,7 @@
 static ring_buffer_t *g_rx_queue = NULL;
 static struct messageHistory *g_message_history = NULL;
 static struct nodeHistory *g_node_list = NULL;
-static struct display_ui_t *g_display_ui = NULL;  // Use struct display_ui_t
+static struct display_ui_t *g_display_ui = NULL;
 
 K_THREAD_STACK_DEFINE(g_msg_task_stack, MSG_TASK_STACK_SIZE);
 static struct k_thread g_msg_task_thread;
@@ -38,11 +38,6 @@ static void process_message(const meshtastic_FromRadio *msg)
     
     // Handle queue status messages
     if (msg->which_payload_variant == meshtastic_FromRadio_queueStatus_tag) {
-        printk("QueueStatus: res=%d free=%u/%u mesh_packet_id=%u\n",
-               (int)msg->queueStatus.res,
-               (unsigned int)msg->queueStatus.free,
-               (unsigned int)msg->queueStatus.maxlen,
-               (unsigned int)msg->queueStatus.mesh_packet_id);
         return;
     }
     
@@ -51,9 +46,6 @@ static void process_message(const meshtastic_FromRadio *msg)
         msg->which_payload_variant == meshtastic_FromRadio_node_info_tag) {
         update_node_history(g_node_list, msg);
         
-        if (msg->which_payload_variant == meshtastic_FromRadio_my_info_tag) {
-            printk("My info received! Node num: %u\n", (unsigned int)g_node_list->my_info.num);
-        }
         return;
     }
     
@@ -77,7 +69,6 @@ static void process_message(const meshtastic_FromRadio *msg)
         
         // Notify the UI about the new message
         if (g_display_ui != NULL && g_display_ui->initialized) {
-            printk("Notifying UI about new message: %s\n", parsed_msg.text);
             display_ui_notify_new_message((display_ui_t *)g_display_ui, &parsed_msg);
         }
     }
@@ -99,13 +90,13 @@ int message_processor_init(ring_buffer_t *rx_queue,
     g_rx_queue = rx_queue;
     g_message_history = message_history;
     g_node_list = node_list;
-    g_display_ui = NULL;  // Will be set later
+    g_display_ui = NULL;
     memset(&g_stats, 0, sizeof(g_stats));
     
     return 0;
 }
 
-// Set the display UI instance for notifications
+// Sets the display UI reference for the message processor to notify about new messages.
 void message_processor_set_display_ui(struct display_ui_t *ui)
 {
     g_display_ui = ui;

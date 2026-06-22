@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include "hardware/display_hal.h"
 
+// The display driver struct. This is the main interface for drawing to the display.
 typedef struct {
     display_hal_config_t hal_config;
     uint8_t *framebuffer;

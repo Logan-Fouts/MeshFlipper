@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/uart.h>
-#include <zephyr/logging/log.h>
 
 #include "hardware/uart_hal.h"
 #include "hardware/display_hal_weact.h"
@@ -13,8 +12,6 @@
 #include "comms/protobuf_handler.h"
 #include "ui/display_ui.h"
 #include "ui/ui_button_handler.h"
-
-LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 // ==================
 // GLOBAL INSTANCES
@@ -37,16 +34,15 @@ static int setup_uart_hal(void)
     const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 
     if (uart_hal_init(&g_uart_hal, uart_dev) != 0) {
-        LOG_ERR("UART HAL init failed");
+        printk("UART HAL init failed\n");
         return -1;
     }
 
     if (uart_hal_configure_default(&g_uart_hal) != 0) {
-        LOG_ERR("UART configure failed");
+        printk("UART configure failed\n");
         return -1;
     }
 
-    // Initialize uart_comms
     uart_comms_init(&g_uart_comms, &g_uart_hal);
 
     // Set UART callback to HAL's ISR handler
@@ -55,7 +51,6 @@ static int setup_uart_hal(void)
     // Set the HAL callback to forward to uart_comms
     uart_hal_set_rx_callback(&g_uart_hal, uart_comms_process_byte, &g_uart_comms);
     
-    // Enable interrupts
     uart_hal_irq_enable(&g_uart_hal);
     
     return 0;
@@ -66,57 +61,16 @@ static int setup_message_processor(void)
     if (message_processor_init(&g_msg_ring_buffer, 
                                &g_message_history, 
                                &g_node_list) != 0) {
-        LOG_ERR("Message processor init failed");
+        printk("Message processor init failed\n");
         return -1;
     } 
 
     if (message_processor_start() != 0) {
-        LOG_ERR("Message processor start failed");
+        printk("Message processor start failed\n");
         return -1;
     }
 
     return 0;
-}
-
-static void test_display_pins(void)
-{
-    printk("=== TESTING DISPLAY PINS ===\n");
-    
-    const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-    if (!device_is_ready(gpio_dev)) {
-        printk("GPIO not ready!\n");
-        return;
-    }
-    printk("GPIO is ready\n");
-    
-    int pins[] = {17, 20, 21, 22};
-    const char *pin_names[] = {"CS", "DC", "RST", "BUSY"};
-    
-    for (int i = 0; i < 4; i++) {
-        struct gpio_dt_spec pin = {
-            .port = gpio_dev,
-            .pin = pins[i],
-            .dt_flags = GPIO_ACTIVE_HIGH,
-        };
-        
-        int ret = gpio_pin_configure_dt(&pin, GPIO_OUTPUT);
-        if (ret < 0) {
-            printk("Failed to configure pin %d (%s): %d\n", pins[i], pin_names[i], ret);
-            continue;
-        }
-        printk("Pin %d (%s) configured\n", pins[i], pin_names[i]);
-        
-        // Toggle 5 times
-        for (int j = 0; j < 5; j++) {
-            gpio_pin_set_dt(&pin, 1);
-            k_sleep(K_MSEC(100));
-            gpio_pin_set_dt(&pin, 0);
-            k_sleep(K_MSEC(100));
-        }
-        printk("Pin %d (%s) toggled 5 times\n", pins[i], pin_names[i]);
-    }
-    
-    printk("=== PIN TEST COMPLETE ===\n");
 }
 
 static int setup_display(void)
@@ -138,9 +92,17 @@ static int setup_buttons(void)
 {
     int ret = ui_button_handler_init(&g_button_ctx, &g_display_ui);
     if (ret < 0) {
-        LOG_ERR("Button handler init failed: %d", ret);
+        printk("BUTTON SETUP: Button handler init failed: %d\n", ret);
         return -1;
     }
+
+    // Start button handler thread
+    ret = ui_button_handler_start();
+    if (ret < 0) {
+        printk("BUTTON SETUP: Button handler start failed: %d\n", ret);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -148,23 +110,49 @@ static int setup(void)
 {
     ring_buffer_init(&g_msg_ring_buffer);
 
-    if (setup_uart_hal() != 0) {
-        return -1;
-    }
+    if (setup_uart_hal() != 0) return -1;
 
-    if (setup_message_processor() != 0) {
-        return -1;
-    }
+    if (setup_message_processor() != 0) return -1;
 
-    if (setup_display() != 0) {
-        LOG_WRN("Display setup failed - continuing without display");
-    }
+    if (setup_display() != 0) return -1;
 
-    if (setup_buttons() != 0) {
-        LOG_WRN("Button setup failed - continuing without buttons");
-    }
+    if (setup_buttons() != 0) return -1;
 
     return 0;
+}
+
+
+static void check_for_outgoing_messages()
+{
+    struct screen_ui_outgoing outgoing;
+    if (display_ui_take_outgoing(&g_display_ui, &outgoing))
+    {
+        // Use the existing send_text_message function
+        int send_ret = send_text_message((uint32_t)outgoing.target_node,
+                                         outgoing.text,
+                                         strlen(outgoing.text));
+        if (send_ret < 0)
+        {
+            printk("Send failed: %d\n", send_ret);
+        }
+    }
+}
+
+static void check_new_messages()
+{
+    if (g_display_ui.initialized && g_message_history.count > 0)
+    {
+        int last_idx = g_message_history.count - 1;
+        if (g_message_history.messages[last_idx].id != g_display_ui.last_handled_incoming_id)
+        {
+            // New message received - update display
+            if (!g_display_ui.thread_active && !g_display_ui.compose_active)
+            {
+                display_ui_refresh(&g_display_ui);
+                g_display_ui.last_handled_incoming_id = g_message_history.messages[last_idx].id;
+            }
+        }
+    }
 }
 
 // ========
@@ -188,44 +176,16 @@ int main(void)
 
     // Show inbox after getting node info
     if (g_display_ui.initialized) {
-        printk("Showing inbox...\n");
         display_ui_show_inbox(&g_display_ui);
     } else {
         printk("Display not initialized!\n");
     }
 
-    // Main loop
+    // Main loop - Check for outgoing messages, and refresh display on new messages
     while (1) {
-        // Process button inputs
-        ui_button_handler_process(&g_button_ctx);
-        
-        // Check for outgoing messages from UI
-        struct screen_ui_outgoing outgoing;
-        if (display_ui_take_outgoing(&g_display_ui, &outgoing)) {
-            LOG_INF("Sending message to %d: %s", outgoing.target_node, outgoing.text);
-            
-            // Use the existing send_text_message function
-            int send_ret = send_text_message((uint32_t)outgoing.target_node, 
-                                             outgoing.text, 
-                                             strlen(outgoing.text));
-            if (send_ret < 0) {
-                LOG_ERR("Send failed: %d", send_ret);
-                printk("Send failed: %d\n", send_ret);
-            } 
-        }
-        
-        // Check for new messages to display
-        if (g_display_ui.initialized && g_message_history.count > 0) {
-            int last_idx = g_message_history.count - 1;
-            if (g_message_history.messages[last_idx].id != g_display_ui.last_handled_incoming_id) {
-                // New message received - update display
-                if (!g_display_ui.thread_active && !g_display_ui.compose_active) {
-                    display_ui_refresh(&g_display_ui);
-                    g_display_ui.last_handled_incoming_id = g_message_history.messages[last_idx].id;
-                }
-            }
-        }
-        
+        check_for_outgoing_messages();
+        check_new_messages();
+
         k_sleep(K_MSEC(50));
     }
     

@@ -1,8 +1,7 @@
 #include "middleware/display_driver.h"
-#include <zephyr/logging/log.h>
 #include <string.h>
 
-LOG_MODULE_REGISTER(display_driver, LOG_LEVEL_DBG);
+// TODO: Add support for more graphics
 
 static uint8_t framebuffer_static[EPD_BUF_SIZE];
 
@@ -269,11 +268,11 @@ int display_driver_draw_text_limited(display_driver_t *drv, int x, int y, int sc
     return display_driver_draw_text(drv, x, y, scale, bold, line);
 }
 
+// Refresh sequence from weact studio driver
 int display_driver_refresh(display_driver_t *drv)
 {
     if (!drv || !drv->initialized) return -EINVAL;
     
-    // This matches the working code's epd_refresh_framebuffer exactly
     int ret = display_hal_set_ram_pointer(&drv->hal_config);
     if (ret < 0) return ret;
 

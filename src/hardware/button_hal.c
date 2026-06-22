@@ -1,21 +1,20 @@
 #include "hardware/button_hal.h"
-#include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(button_hal, LOG_LEVEL_DBG);
-
+// Initialize the button hardware (GPIO pin)
 int button_hal_init(const button_hal_config_t *config) {
     if (!config) {
-        LOG_ERR("Config is NULL");
+        printk("button_hal_init: Invalid config\n");
         return -EINVAL;
     }
     
     if (!device_is_ready(config->gpio_dev)) {
-        LOG_ERR("GPIO device not ready for pin %d", config->pin);
+        printk("button_hal_init: GPIO device not ready\n");
         return -ENODEV;
     }
     return 0;
 }
 
+// Read the current state of the button (0 or 1)
 int button_hal_read(const button_hal_config_t *config) {
     if (!config) {
         return -EINVAL;
@@ -23,6 +22,7 @@ int button_hal_read(const button_hal_config_t *config) {
     return gpio_pin_get(config->gpio_dev, config->pin);
 }
 
+// Configure the button hardware (GPIO pin)
 int button_hal_configure(const button_hal_config_t *config, gpio_flags_t flags) {
     if (!config) {
         return -EINVAL;

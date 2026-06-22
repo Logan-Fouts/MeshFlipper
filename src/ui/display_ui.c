@@ -818,20 +818,16 @@ static bool is_broadcast_compose_selected(display_ui_t *ui)
 int display_ui_init(display_ui_t *ui, const display_hal_config_t *hal_config,
                     struct messageHistory *msg_hist, struct nodeHistory *node_hist)
 {
-    printk("DISPLAY_UI_INIT: Starting...\n");
-    
     if (!ui || !hal_config) {
         printk("DISPLAY_UI_INIT: Invalid params\n");
         return -EINVAL;
     }
     
-    printk("DISPLAY_UI_INIT: Initializing driver...\n");
     int ret = display_driver_init(&ui->driver, hal_config);
     if (ret < 0) {
         printk("DISPLAY_UI_INIT: Driver init failed: %d\n", ret);
         return ret;
     }
-    printk("DISPLAY_UI_INIT: Driver initialized\n");
     
     ui->message_history = msg_hist;
     ui->node_history = node_hist;
@@ -849,7 +845,6 @@ int display_ui_init(display_ui_t *ui, const display_hal_config_t *hal_config,
     ui->popup_active = false;
     current_display_index = 0;
     
-    printk("DISPLAY_UI_INIT: Complete!\n");
     return 0;
 }
 
@@ -860,6 +855,7 @@ int display_ui_deinit(display_ui_t *ui)
     return display_driver_deinit(&ui->driver);
 }
 
+// Simple boot screen with app name and version
 int display_ui_show_boot(display_ui_t *ui)
 {
     if (!ui || !ui->initialized) return -EINVAL;
@@ -955,8 +951,6 @@ int display_ui_refresh(display_ui_t *ui)
 
 int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
 {
-    printk("HANDLE ACTION: %d\n", action);
-    
     if (!ui || !ui->initialized) {
         printk("UI not initialized!\n");
         return -EINVAL;
@@ -1169,51 +1163,9 @@ bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgo
     return true;
 }
 
-int display_ui_test_pattern(display_ui_t *ui)
-{
-    printk("DISPLAY_TEST: Drawing test pattern...\n");
-    
-    if (!ui || !ui->initialized) {
-        printk("DISPLAY_TEST: UI not initialized!\n");
-        return -EINVAL;
-    }
-    
-    display_driver_clear(&ui->driver);
-    printk("DISPLAY_TEST: Display cleared\n");
-    
-    // Draw a border
-    display_driver_draw_rect(&ui->driver, 10, 10, 
-                             ui->driver.hal_config.width - 20, 
-                             ui->driver.hal_config.height - 20, true);
-    printk("DISPLAY_TEST: Border drawn\n");
-    
-    // Draw some shapes
-    display_driver_draw_filled_rect(&ui->driver, 30, 30, 40, 40, true);
-    display_driver_draw_rect(&ui->driver, 80, 30, 40, 40, true);
-    printk("DISPLAY_TEST: Shapes drawn\n");
-    
-    // Draw text
-    display_driver_draw_text(&ui->driver, 30, 80, 1, true, "TEST");
-    display_driver_draw_text(&ui->driver, 30, 100, 2, true, "MESH");
-    printk("DISPLAY_TEST: Text drawn\n");
-    
-    // Draw lines
-    display_driver_draw_hline(&ui->driver, 30, 140, 100, true);
-    display_driver_draw_vline(&ui->driver, 80, 140, 50, true);
-    printk("DISPLAY_TEST: Lines drawn\n");
-    
-    printk("DISPLAY_TEST: Refreshing display...\n");
-    int ret = display_driver_refresh(&ui->driver);
-    printk("DISPLAY_TEST: Refresh returned: %d\n", ret);
-    
-    return ret;
-}
-
 void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg)
 {
     if (!ui || !ui->initialized || !msg) return;
-    
-    printk("UI: New message notification - from %d to %d, text: %s\n", msg->from, msg->to, msg->text);
     
     // Check if this is a broadcast message
     bool is_broadcast = is_broadcast_message(msg);
@@ -1222,7 +1174,6 @@ void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg)
     
     // Don't show popup for messages we sent
     if (is_from_me) {
-        printk("UI: Skipping popup - message from self\n");
         return;
     }
     
@@ -1244,7 +1195,6 @@ void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg)
     
     // If we're in this thread, just refresh the view
     if (in_this_thread) {
-        printk("UI: In this thread - refreshing view\n");
         ui->last_handled_incoming_id = msg->id;
         // Rebuild thread snapshot to include new message
         if (ui->thread_broadcast) {
@@ -1257,25 +1207,25 @@ void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg)
             ui->thread_message_index = ui->thread_snapshot_count - 1;
         }
         display_ui_refresh(ui);
+
         return;
     }
     
     // If we're in a different thread or inbox, show popup
     if (!ui->popup_active) {
-        printk("UI: Showing popup for new message\n");
         ui->popup_active = true;
         
         // First, render the current screen
-        int ret = display_ui_refresh(ui);
-        if (ret < 0) {
-            printk("UI: Refresh failed: %d\n", ret);
-        }
+        // int ret = display_ui_refresh(ui);
+        // if (ret < 0) {
+        //     printk("UI: Refresh failed: %d\n", ret);
+        // }
         
-        // Then draw popup overlay on top
+        // Draw popup overlay on top
         draw_message_popup(ui, msg);
         
         // Refresh to show the popup
-        ret = display_driver_refresh(&ui->driver);
+        int ret = display_driver_refresh(&ui->driver);
         if (ret < 0) {
             printk("UI: Popup refresh failed: %d\n", ret);
         }
