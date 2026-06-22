@@ -6,13 +6,6 @@
 
 #define NUM_BUTTONS 4
 
-/*
-    This module manages the hardware buttons and translates them into UI actions.
-    params:
-        - buttons: Array of button_t structs representing the hardware buttons
-        - display_ui: Pointer to the display_ui_t instance for interacting with the UI
-        - initialized: Flag to indicate if the button handler has been initialized
-*/
 typedef struct {
     button_t buttons[NUM_BUTTONS];
     display_ui_t *display_ui;

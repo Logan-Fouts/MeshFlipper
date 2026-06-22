@@ -79,7 +79,7 @@ static int setup_display(void)
     
     int ret = display_ui_init(&g_display_ui, &hal_config, &g_message_history, &g_node_list);
     if (ret < 0) {
-        printk("DISPLAY SETUP: Display UI init failed: %d\n", ret);
+        printk("Display UI init failed: %d\n", ret);
         return -1;
     }
     message_processor_set_display_ui(&g_display_ui);
@@ -92,14 +92,14 @@ static int setup_buttons(void)
 {
     int ret = ui_button_handler_init(&g_button_ctx, &g_display_ui);
     if (ret < 0) {
-        printk("BUTTON SETUP: Button handler init failed: %d\n", ret);
+        printk("Button handler init failed: %d\n", ret);
         return -1;
     }
 
     // Start button handler thread
     ret = ui_button_handler_start();
     if (ret < 0) {
-        printk("BUTTON SETUP: Button handler start failed: %d\n", ret);
+        printk("Button handler start failed: %d\n", ret);
         return -1;
     }
 
@@ -110,24 +110,32 @@ static int setup(void)
 {
     ring_buffer_init(&g_msg_ring_buffer);
 
-    if (setup_uart_hal() != 0) return -1;
+    if (setup_uart_hal() != 0) {
+        printk("UART setup failed\n");
+        return -1;
+    }
 
-    if (setup_message_processor() != 0) return -1;
+    if (setup_message_processor() != 0) {
+        printk("Message processor setup failed\n");
+        return -1;
+    }
 
-    if (setup_display() != 0) return -1;
+    if (setup_display() != 0) {
+        printk("Display setup failed - continuing without display\n");
+    }
 
-    if (setup_buttons() != 0) return -1;
+    if (setup_buttons() != 0) {
+        printk("Button setup failed - continuing without buttons\n");
+    }
 
     return 0;
 }
 
-
-static void check_for_outgoing_messages()
+static void check_for_outgoing_messages(void)
 {
     struct screen_ui_outgoing outgoing;
     if (display_ui_take_outgoing(&g_display_ui, &outgoing))
     {
-        // Use the existing send_text_message function
         int send_ret = send_text_message((uint32_t)outgoing.target_node,
                                          outgoing.text,
                                          strlen(outgoing.text));
@@ -138,7 +146,7 @@ static void check_for_outgoing_messages()
     }
 }
 
-static void check_new_messages()
+static void check_new_messages(void)
 {
     if (g_display_ui.initialized && g_message_history.count > 0)
     {
@@ -161,14 +169,12 @@ static void check_new_messages()
 
 int main(void)
 {
-    printk("Starting MeshFlipper...\n");
-    
     if (setup() != 0) {
         printk("Setup failed\n");
         return -1;
     }
 
-    printk("MeshFlipper ready!\n");
+    printk("\nMeshFlipper ready!\n");
     
     if (!message_processor_wait_for_my_node_info(WAIT_FOR_NODE_INFO_TIMEOUT_MS)) {
         printk("Failed to get my node info\n");

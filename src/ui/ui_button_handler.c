@@ -3,14 +3,16 @@
 #include <zephyr/drivers/gpio.h>
 #include "hardware/button_hal.h"
 
-// Button pins 
+
 #define BUTTON_PREV_PIN     2
 #define BUTTON_NEXT_PIN     4
 #define BUTTON_PRIMARY_PIN  3
 #define BUTTON_SECONDARY_PIN 5
 
-#define LONG_PRESS_DURATION_MS 1000
-#define NUM_BUTTONS 4
+#define BUTTON_POLL_INTERVAL_MS 50
+#define BUTTON_DEBOUNCE_MS 50
+
+#define LONG_PRESS_DURATION_MS 2000
 
 // Thread stack and thread structure
 K_THREAD_STACK_DEFINE(g_btn_task_stack, 2048);
@@ -27,28 +29,22 @@ static void on_button_press(uint8_t pin, void *user_data)
         return;
     }
     
-    printk("BUTTON PRESS: pin %d\n", pin);
-    
     enum screen_ui_action action;
     switch (pin) {
         case BUTTON_PREV_PIN:
             action = SCREEN_UI_ACTION_PREVIOUS;
-            printk("  Action: PREVIOUS\n");
             break;
         case BUTTON_NEXT_PIN:
             action = SCREEN_UI_ACTION_NEXT;
-            printk("  Action: NEXT\n");
             break;
         case BUTTON_PRIMARY_PIN:
             action = SCREEN_UI_ACTION_PRIMARY;
-            printk("  Action: PRIMARY\n");
             break;
         case BUTTON_SECONDARY_PIN:
             action = SCREEN_UI_ACTION_SECONDARY;
-            printk("  Action: SECONDARY\n");
             break;
         default:
-            printk("  Unknown pin!\n");
+            printk("Unknown pin!\n");
             return;
     }
     
@@ -80,8 +76,8 @@ static void button_processor_thread_entry(void *p1, void *p2, void *p3)
         if (g_btn_ctx != NULL && g_btn_ctx->initialized) {
             ui_button_handler_process(g_btn_ctx);
         }
-        // Poll buttons every 50ms (same as BUTTON_POLL_MS)
-        k_sleep(K_MSEC(50));
+
+        k_sleep(K_MSEC(BUTTON_POLL_INTERVAL_MS));
     }
 }
 
@@ -118,7 +114,6 @@ int ui_button_handler_init(ui_button_context_t *ctx, display_ui_t *display_ui)
     };
     
     for (int i = 0; i < NUM_BUTTONS; i++) {
-        printk("Initializing button %d on pin %d\n", i, hal_configs[i].pin);
         int ret = button_init(&ctx->buttons[i], &hal_configs[i]);
         if (ret < 0) {
             printk("ERROR: Failed to init button %d: %d\n", i, ret);

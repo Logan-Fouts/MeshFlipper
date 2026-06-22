@@ -8,7 +8,7 @@
 // Forward declarations
 struct messageHistory;
 struct nodeHistory;
-struct display_ui_t;  // Forward declaration with struct
+struct display_ui_t;  // Keep as struct forward declaration
 
 // Initialize the message processor
 int message_processor_init(ring_buffer_t *rx_queue,

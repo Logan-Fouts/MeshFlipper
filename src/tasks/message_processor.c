@@ -16,7 +16,7 @@
 static ring_buffer_t *g_rx_queue = NULL;
 static struct messageHistory *g_message_history = NULL;
 static struct nodeHistory *g_node_list = NULL;
-static struct display_ui_t *g_display_ui = NULL;
+static display_ui_t *g_display_ui = NULL;
 
 K_THREAD_STACK_DEFINE(g_msg_task_stack, MSG_TASK_STACK_SIZE);
 static struct k_thread g_msg_task_thread;
@@ -69,7 +69,7 @@ static void process_message(const meshtastic_FromRadio *msg)
         
         // Notify the UI about the new message
         if (g_display_ui != NULL && g_display_ui->initialized) {
-            display_ui_notify_new_message((display_ui_t *)g_display_ui, &parsed_msg);
+            display_ui_notify_new_message(g_display_ui, &parsed_msg);
         }
     }
 }
@@ -90,7 +90,7 @@ int message_processor_init(ring_buffer_t *rx_queue,
     g_rx_queue = rx_queue;
     g_message_history = message_history;
     g_node_list = node_list;
-    g_display_ui = NULL;
+    g_display_ui = NULL;  // Will be set later
     memset(&g_stats, 0, sizeof(g_stats));
     
     return 0;
@@ -99,10 +99,7 @@ int message_processor_init(ring_buffer_t *rx_queue,
 // Sets the display UI reference for the message processor to notify about new messages.
 void message_processor_set_display_ui(struct display_ui_t *ui)
 {
-    g_display_ui = ui;
-    if (ui != NULL) {
-        printk("Display UI set for message notifications\n");
-    }
+    g_display_ui = (display_ui_t *)ui;
 }
 
 static void message_processor_thread_entry(void *p1, void *p2, void *p3)
@@ -110,8 +107,6 @@ static void message_processor_thread_entry(void *p1, void *p2, void *p3)
     (void)p1; (void)p2; (void)p3;
     
     meshtastic_FromRadio msg;
-    
-    printk("Message processor thread started\n");
     
     while (1) {
         if (ring_buffer_wait(g_rx_queue, K_FOREVER)) {
@@ -136,7 +131,6 @@ int message_processor_start(void)
                     NULL, NULL, NULL,
                     K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
     
-    printk("Message processor thread created\n");
     return 0;
 }
 
@@ -147,8 +141,6 @@ bool message_processor_wait_for_my_node_info(int timeout_ms)
     
     int elapsed_ms = 0;
     
-    printk("Waiting for my node info...\n");
-    
     while (!g_node_list->my_info.valid && elapsed_ms < timeout_ms) {
         send_want_config();
         k_sleep(K_SECONDS(2));
@@ -156,7 +148,6 @@ bool message_processor_wait_for_my_node_info(int timeout_ms)
     }
     
     if (g_node_list->my_info.valid) {
-        printk("My node info received! Node num: %u\n", (unsigned int)g_node_list->my_info.num);
         return true;
     } else {
         printk("Timeout waiting for my node info\n");

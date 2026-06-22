@@ -31,7 +31,6 @@ int button_init(button_t *btn, const button_hal_config_t *hal_config) {
     }
     
     btn->last_level = button_hal_read(&btn->hal_config);
-    printk("Button on pin %d initialized, initial level: %d\n", hal_config->pin, btn->last_level);
     
     return 0;
 }

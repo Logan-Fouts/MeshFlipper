@@ -3,10 +3,16 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <zephyr/kernel.h>
 #include "middleware/display_driver.h"
 #include "models/mesh_message.h"
 #include "models/mesh_node.h"
 
+// Forward declarations
+struct messageHistory;
+struct nodeHistory;
+
+// UI Actions - matches your existing enum
 enum screen_ui_action {
     SCREEN_UI_ACTION_PREVIOUS = 0,
     SCREEN_UI_ACTION_NEXT,
@@ -15,21 +21,21 @@ enum screen_ui_action {
     SCREEN_UI_ACTION_HOME,
 };
 
-// Represents an outgoing message that the UI wants to send. The main loop will check for pending outgoing messages and send them.
+// Outgoing message from UI
 struct screen_ui_outgoing {
     bool valid;
     int32_t target_node;
     char text[96];
 };
 
-// A struct representing an entry in the thread view, which can be either an incoming or outgoing message.
+// Thread entry for rendering
 struct display_thread_entry {
     const char *text;
     bool is_outgoing;
     const char *sender_name;
 };
 
-// A struct representing an entry in the node picker view.
+// Node entry for node picker
 struct display_node_entry {
     uint32_t node_num;
     const char *label;
@@ -55,6 +61,7 @@ typedef struct display_ui_t {
     struct nodeHistory *node_history;
     bool initialized;
     
+    // UI State
     bool thread_active;
     bool thread_broadcast;
     bool node_picker_active;
@@ -69,6 +76,10 @@ typedef struct display_ui_t {
     struct screen_ui_outgoing pending;
     bool popup_active;
     
+    // Mutex for thread safety
+    struct k_mutex ui_mutex;
+    
+    // Snapshot buffers
     struct message thread_snapshot[32];
     size_t thread_snapshot_count;
     struct display_node_entry node_snapshot[32];
@@ -77,9 +88,12 @@ typedef struct display_ui_t {
     size_t node_snapshot_count;
 } display_ui_t;
 
+// Initialization
 int display_ui_init(display_ui_t *ui, const display_hal_config_t *hal_config,
                     struct messageHistory *msg_hist, struct nodeHistory *node_hist);
 int display_ui_deinit(display_ui_t *ui);
+
+// Screen rendering
 int display_ui_show_boot(display_ui_t *ui);
 int display_ui_show_inbox(display_ui_t *ui);
 int display_ui_show_thread(display_ui_t *ui, int32_t peer_node, bool broadcast);
@@ -87,8 +101,11 @@ int display_ui_show_compose(display_ui_t *ui, int32_t target_node, bool broadcas
 int display_ui_show_node_picker(display_ui_t *ui);
 int display_ui_show_popup(display_ui_t *ui, const char *title, const char *message);
 int display_ui_refresh(display_ui_t *ui);
+int display_ui_test_pattern(display_ui_t *ui);
+
+// Action handling
 int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action);
 bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgoing);
-void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg);  // NEW
+void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg);
 
 #endif
