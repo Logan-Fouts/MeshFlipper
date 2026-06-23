@@ -4,12 +4,12 @@
 #include "hardware/button_hal.h"
 
 
-#define BUTTON_PREV_PIN     2
-#define BUTTON_NEXT_PIN     4
-#define BUTTON_PRIMARY_PIN  3
+#define BUTTON_PREV_PIN     9
+#define BUTTON_NEXT_PIN     10
+#define BUTTON_PRIMARY_PIN  8
 #define BUTTON_SECONDARY_PIN 5
 
-#define BUTTON_POLL_INTERVAL_MS 50
+#define BUTTON_POLL_INTERVAL_MS 10
 #define BUTTON_DEBOUNCE_MS 50
 
 #define LONG_PRESS_DURATION_MS 2000
