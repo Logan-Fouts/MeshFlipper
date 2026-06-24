@@ -6,7 +6,7 @@
 
 int init_on_screen_keyb(struct on_screen_keyb_t *keyb) {
     char tmp_keyboard[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ. ";
-    int tmp_num_keys = sizeof(tmp_keyboard) - 1; // -1 for null terminator
+    int tmp_num_keys = sizeof(tmp_keyboard);
 
     // Allocate memory for the keyboard array
     keyb->keyboard = malloc(tmp_num_keys * sizeof(char));
@@ -36,6 +36,9 @@ char get_current_key(struct on_screen_keyb_t *keyb) {
     return keyb->keyboard[keyb->current_key_ix];
 }
 
+// In on_screen_keyb.c, add static tracking of previous selection:
+static int prev_key_ix = -1;
+
 void render_on_screen_keyboard(struct on_screen_keyb_t *keyb, struct display_ui_t *ui) {
     if (!keyb || !ui || !ui->initialized) return;
     
@@ -49,21 +52,23 @@ void render_on_screen_keyboard(struct on_screen_keyb_t *keyb, struct display_ui_
         visible_keys[i] = keyb->keyboard[idx];
     }
     
-    // Draw keyboard background
     int width = ui->driver.hal_config.width;
     int height = ui->driver.hal_config.height;
     
-    // Draw a box for the keyboard
     int box_x = 20;
     int box_y = height - 80;
     int box_w = width - 40;
     int box_h = 60;
     
-    // Clear the keyboard area first
-    display_driver_draw_filled_rect(&ui->driver, box_x, box_y, box_w, box_h, false);
-    display_driver_draw_rect(&ui->driver, box_x, box_y, box_w, box_h, true);
+    // Only clear and redraw if selection changed or first time
+    if (prev_key_ix != keyb->current_key_ix || prev_key_ix == -1) {
+        // Clear the keyboard area
+        display_driver_draw_filled_rect(&ui->driver, box_x, box_y, box_w, box_h, false);
+        display_driver_draw_rect(&ui->driver, box_x, box_y, box_w, box_h, true);
+        prev_key_ix = keyb->current_key_ix;
+    }
     
-    // Draw the keys horizontally
+    // Draw the keys
     int key_width = 36;
     int key_height = 36;
     int spacing = 6;
@@ -74,33 +79,28 @@ void render_on_screen_keyboard(struct on_screen_keyb_t *keyb, struct display_ui_
     for (int i = 0; i < 5; i++) {
         int x = start_x + i * (key_width + spacing);
         int y = start_y;
+        bool is_selected = (i == 2);
         
-        // Highlight the center key (current selection)
-        bool is_selected = (i == 2); // Center key
-        
-        if (is_selected) {
-            // Draw thick border for selected key
-            display_driver_draw_rect(&ui->driver, x - 2, y - 2, key_width + 4, key_height + 4, true);
-            display_driver_draw_filled_rect(&ui->driver, x, y, key_width, key_height, false);
-            display_driver_draw_rect(&ui->driver, x, y, key_width, key_height, true);
-        } else {
-            display_driver_draw_filled_rect(&ui->driver, x, y, key_width, key_height, false);
-            display_driver_draw_rect(&ui->driver, x, y, key_width, key_height, true);
+        // Only redraw keys that might have changed
+        if (is_selected || prev_key_ix != keyb->current_key_ix) {
+            if (is_selected) {
+                display_driver_draw_rect(&ui->driver, x - 2, y - 2, key_width + 4, key_height + 4, true);
+                display_driver_draw_filled_rect(&ui->driver, x, y, key_width, key_height, false);
+                display_driver_draw_rect(&ui->driver, x, y, key_width, key_height, true);
+            } else {
+                display_driver_draw_filled_rect(&ui->driver, x, y, key_width, key_height, false);
+                display_driver_draw_rect(&ui->driver, x, y, key_width, key_height, true);
+            }
+            
+            char key_char[2] = {visible_keys[i], '\0'};
+            int char_x = x + (key_width / 2) - 3;
+            int char_y = y + (key_height / 2) - 4;
+            display_driver_draw_text(&ui->driver, char_x, char_y, 1, is_selected ? false : true, key_char);
         }
-        
-        // Draw the character
-        char key_char[2] = {visible_keys[i], '\0'};
-        int char_x = x + (key_width / 2) - 3;
-        int char_y = y + (key_height / 2) - 4;
-        display_driver_draw_text(&ui->driver, char_x, char_y, 1, is_selected ? false : true, key_char);
     }
     
-    // Draw the index indicators below the keyboard
+    // Update index text
     char idx_text[32];
     snprintf(idx_text, sizeof(idx_text), "Key %d/%d", keyb->current_key_ix + 1, keyb->num_keys);
     display_driver_draw_text_centered(&ui->driver, box_y + box_h + 8, 1, false, idx_text);
-    
-    // Draw help text
-    char help_text[] = "PREV/NEXT: Navigate  PRIMARY: Select  SECONDARY: Exit";
-    display_driver_draw_text_centered(&ui->driver, box_y + box_h + 22, 1, false, help_text);
 }
