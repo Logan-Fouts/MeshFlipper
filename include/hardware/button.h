@@ -6,8 +6,7 @@
 #include <stdbool.h>
 #include "hardware/button_hal.h"
 
-#define BUTTON_POLL_MS 50
-#define BUTTON_HOME_HOLD_MS 700
+#define BUTTON_HOME_HOLD_MS 2000
 #define GPIO_HIGH 1
 #define GPIO_LOW 0
 

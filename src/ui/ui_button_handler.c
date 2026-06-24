@@ -12,8 +12,6 @@
 #define BUTTON_POLL_INTERVAL_MS 10
 #define BUTTON_DEBOUNCE_MS 50
 
-#define LONG_PRESS_DURATION_MS 2000
-
 // Thread stack and thread structure
 K_THREAD_STACK_DEFINE(g_btn_task_stack, 2048);
 static struct k_thread g_btn_task_thread;
@@ -124,7 +122,6 @@ int ui_button_handler_init(ui_button_context_t *ctx, display_ui_t *display_ui)
         // Set callbacks and user data for each button
         ctx->buttons[i].callbacks = callbacks;
         ctx->buttons[i].user_data = ctx;
-        ctx->buttons[i].long_press_threshold_ms = LONG_PRESS_DURATION_MS;
     }
     
     ctx->initialized = true;
