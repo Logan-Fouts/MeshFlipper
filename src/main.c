@@ -4,7 +4,6 @@
 
 #include "hardware/uart_hal.h"
 #include "hardware/display_hal_weact.h"
-#include "ui/on_screen_keyb.h"
 #include "comms/uart_comms.h"
 #include "models/ring_buffer.h"
 #include "models/mesh_message.h"
@@ -24,8 +23,6 @@ ring_buffer_t g_msg_ring_buffer;
 // Display and UI instances
 static display_ui_t g_display_ui;
 static ui_button_context_t g_button_ctx;
-static on_screen_keyb_t g_on_screen_keyb;
-
 
 
 
@@ -106,15 +103,6 @@ static int setup_buttons(void)
     return 0;
 }
 
-static int setup_on_screen_keyb(void) {
-    int ret = init_on_screen_keyb(&g_on_screen_keyb);
-    if (ret < 0) {
-        printk("On-screen keyb init failed");
-    }
-
-    return 0;
-}
-
 static int setup(void) 
 {
     ring_buffer_init(&g_msg_ring_buffer);
@@ -136,11 +124,6 @@ static int setup(void)
 
     if (setup_buttons() != 0) {
         printk("Button setup failed - continuing without buttons\n");
-        return -1;
-    }
-
-    if (setup_on_screen_keyb() != 0) {
-        printk("On-screen keyb setup failed - continuing without on-screen keyb\n");
         return -1;
     }
 

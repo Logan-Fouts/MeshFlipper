@@ -10,5 +10,11 @@ typedef struct on_screen_keyb_t {
 } on_screen_keyb_t;
 
 int init_on_screen_keyb(struct on_screen_keyb_t *keyb);
+int increment_keyb_ix(struct on_screen_keyb_t *keyb, int direction);
+char get_current_key(struct on_screen_keyb_t *keyb);
+
+// Forward declaration of display_ui_t
+struct display_ui_t;
+void render_on_screen_keyboard(struct on_screen_keyb_t *keyb, struct display_ui_t *ui);
 
 #endif

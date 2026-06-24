@@ -7,6 +7,7 @@
 #include "middleware/display_driver.h"
 #include "models/mesh_message.h"
 #include "models/mesh_node.h"
+#include "ui/on_screen_keyb.h"
 
 // Forward declarations
 struct messageHistory;
@@ -86,6 +87,11 @@ typedef struct display_ui_t {
     char node_snapshot_labels[32][40];
     uint32_t node_snapshot_last_heard[32];
     size_t node_snapshot_count;
+
+    on_screen_keyb_t keyboard;
+    bool keyboard_active;
+    char compose_buffer[64];
+    int compose_buffer_pos;
 } display_ui_t;
 
 // Initialization
@@ -107,5 +113,12 @@ int display_ui_test_pattern(display_ui_t *ui);
 int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action);
 bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgoing);
 void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg);
+
+// Add new function declarations:
+int display_ui_show_keyboard(display_ui_t *ui);
+char display_ui_get_selected_key(display_ui_t *ui);
+void display_ui_keyboard_navigate(display_ui_t *ui, int direction);
+void display_ui_keyboard_select(display_ui_t *ui);
+
 
 #endif

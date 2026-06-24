@@ -26,7 +26,6 @@ static const char *const quick_replies[] = {
     "Noted. Will get back to you.",
 };
 
-
 // Current selection state for inbox
 static int current_display_index = 0;
 
@@ -54,6 +53,10 @@ static int inbox_start_index(int selected_pos, int inbox_count);
 static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t target_node);
 static bool is_broadcast_compose_selected(display_ui_t *ui);
 static void draw_message_popup(display_ui_t *ui, const struct message *msg);
+
+// Keyboard functions
+void display_ui_keyboard_navigate(display_ui_t *ui, int direction);
+void display_ui_keyboard_select(display_ui_t *ui);
 
 // Get node name
 static const char* get_node_name(const struct nodeHistory *node_hist, int32_t node_num)
@@ -323,7 +326,6 @@ static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t targ
             ui->thread_message_index = ui->thread_snapshot_count - 1;
         }
     }
-    
 }
 
 // Draw message popup
@@ -772,8 +774,20 @@ static void render_compose(display_ui_t *ui)
     display_driver_draw_text_limited(&ui->driver, 16, 66, 1, false, to_line, 34);
     display_driver_draw_rect(&ui->driver, 14, 78, ui->driver.hal_config.width - 28, 1, true);
     
-    const char *reply = quick_replies[ui->quick_reply_index];
-    display_driver_draw_text_limited(&ui->driver, 16, 86, 1, true, reply, 84);
+    // Show the compose buffer if it has content, otherwise show quick replies
+    if (ui->compose_buffer_pos > 0) {
+        // Show the composed text
+        char display_text[64];
+        snprintf(display_text, sizeof(display_text), "MSG: %s", ui->compose_buffer);
+        display_driver_draw_text_limited(&ui->driver, 16, 86, 1, true, display_text, 84);
+        
+        // Show keyboard hint
+        display_driver_draw_text(&ui->driver, 16, 100, 1, false, "KEY: Press 2 for keyboard");
+    } else {
+        // Show quick replies
+        const char *reply = quick_replies[ui->quick_reply_index];
+        display_driver_draw_text_limited(&ui->driver, 16, 86, 1, true, reply, 84);
+    }
     
     display_driver_draw_rect(&ui->driver, 12, ui->driver.hal_config.height - 32,
                              ui->driver.hal_config.width - 24, 1, true);
@@ -863,7 +877,13 @@ int display_ui_init(display_ui_t *ui, const display_hal_config_t *hal_config,
     ui->compose_active = false;
     ui->compose_broadcast = false;
     ui->popup_active = false;
+    ui->keyboard_active = false;
+    ui->compose_buffer[0] = '\0';
+    ui->compose_buffer_pos = 0;
     current_display_index = 0;
+    
+    // Initialize keyboard
+    init_on_screen_keyb(&ui->keyboard);
     
     return 0;
 }
@@ -938,7 +958,11 @@ int display_ui_show_compose(display_ui_t *ui, int32_t target_node, bool broadcas
     ui->compose_broadcast = broadcast;
     ui->selected_target_node = target_node;
     ui->quick_reply_index = 0;
+    ui->compose_buffer[0] = '\0';
+    ui->compose_buffer_pos = 0;
+    ui->keyboard_active = false;
     render_compose(ui);
+    display_ui_show_keyboard(ui);
     UI_UNLOCK(ui);
     return 0;
 }
@@ -972,6 +996,82 @@ int display_ui_show_popup(display_ui_t *ui, const char *title, const char *messa
     int ret = display_driver_refresh(&ui->driver);
     UI_UNLOCK(ui);
     return ret;
+}
+
+// Show keyboard overlay
+int display_ui_show_keyboard(display_ui_t *ui)
+{
+    if (!ui || !ui->initialized) return -EINVAL;
+    
+    UI_LOCK(ui);
+    ui->keyboard_active = true;
+    
+    // Render the current screen first
+    int ret;
+    if (ui->thread_active) {
+        if (ui->thread_broadcast) {
+            rebuild_broadcast_thread_snapshot(ui);
+        } else {
+            rebuild_thread_snapshot(ui, (uint32_t)ui->thread_node_num);
+        }
+        ret = render_thread_screen(ui);
+    } else if (ui->node_picker_active) {
+        ret = render_node_picker(ui);
+    } else if (ui->compose_active) {
+        render_compose(ui);
+        ret = 0;
+    } else {
+        ret = render_inbox(ui);
+    }
+    
+    // Then render keyboard on top
+    render_on_screen_keyboard(&ui->keyboard, ui);
+    
+    ret = display_driver_refresh(&ui->driver);
+    UI_UNLOCK(ui);
+    return ret;
+}
+
+// Keyboard navigation functions
+void display_ui_keyboard_navigate(display_ui_t *ui, int direction)
+{
+    if (!ui || !ui->keyboard_active) return;
+    increment_keyb_ix(&ui->keyboard, direction);
+    display_ui_show_keyboard(ui);
+}
+
+void display_ui_keyboard_select(display_ui_t *ui)
+{
+    if (!ui || !ui->keyboard_active) return;
+    
+    char key = get_current_key(&ui->keyboard);
+    if (key == ' ') {
+        // Space - add space to buffer
+        if (ui->compose_buffer_pos < sizeof(ui->compose_buffer) - 1) {
+            ui->compose_buffer[ui->compose_buffer_pos++] = ' ';
+            ui->compose_buffer[ui->compose_buffer_pos] = '\0';
+        }
+    } else if (key == '.') {
+        // Period - add period to buffer
+        if (ui->compose_buffer_pos < sizeof(ui->compose_buffer) - 1) {
+            ui->compose_buffer[ui->compose_buffer_pos++] = '.';
+            ui->compose_buffer[ui->compose_buffer_pos] = '\0';
+        }
+    } else {
+        // Alphanumeric character
+        if (ui->compose_buffer_pos < sizeof(ui->compose_buffer) - 1) {
+            ui->compose_buffer[ui->compose_buffer_pos++] = key;
+            ui->compose_buffer[ui->compose_buffer_pos] = '\0';
+        }
+    }
+    
+    // Update the compose screen if active
+    if (ui->compose_active) {
+        render_compose(ui);
+        // Redraw keyboard on top
+        render_on_screen_keyboard(&ui->keyboard, ui);
+        display_driver_refresh(&ui->driver);
+    }
 }
 
 // Refresh UI
@@ -1022,6 +1122,9 @@ int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
         ui->thread_active = false;
         ui->thread_broadcast = false;
         ui->node_picker_active = false;
+        ui->keyboard_active = false;
+        ui->compose_buffer[0] = '\0';
+        ui->compose_buffer_pos = 0;
         current_display_index = 0;
         ret = display_ui_refresh(ui);
         UI_UNLOCK(ui);
@@ -1029,7 +1132,7 @@ int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
     }
 
     // Inbox state - this is the main inbox view
-    if (!ui->compose_active && !ui->thread_active && !ui->node_picker_active) {
+    if (!ui->compose_active && !ui->thread_active && !ui->node_picker_active && !ui->keyboard_active) {
         
         if (action == SCREEN_UI_ACTION_PREVIOUS) {
             int inbox_indices[MAX_VISIBLE_MESSAGES];
@@ -1183,30 +1286,90 @@ int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
     // Compose state
     if (ui->compose_active) {
         
+        // If keyboard is active, handle keyboard navigation first
+        if (ui->keyboard_active) {
+            if (action == SCREEN_UI_ACTION_PREVIOUS) {
+                display_ui_keyboard_navigate(ui, -1); // Move left
+                UI_UNLOCK(ui);
+                return 0;
+            }
+            if (action == SCREEN_UI_ACTION_NEXT) {
+                display_ui_keyboard_navigate(ui, 1); // Move right
+                UI_UNLOCK(ui);
+                return 0;
+            }
+            if (action == SCREEN_UI_ACTION_PRIMARY) {
+                display_ui_keyboard_select(ui); // Select current key
+                UI_UNLOCK(ui);
+                return 0;
+            }
+            if (action == SCREEN_UI_ACTION_SECONDARY) {
+                ui->keyboard_active = false; // Exit keyboard
+                render_compose(ui);
+                UI_UNLOCK(ui);
+                return 0;
+            }
+            UI_UNLOCK(ui);
+            return 0;
+        }
+        
+        // Regular compose actions (when keyboard is not active)
         if (action == SCREEN_UI_ACTION_PREVIOUS) {
-            ui->quick_reply_index = (ui->quick_reply_index == 0) ? 
-                MAX_QUICK_REPLIES - 1 : ui->quick_reply_index - 1;
-            render_compose(ui);
+            // If we have text in buffer, clear it with previous
+            if (ui->compose_buffer_pos > 0) {
+                // Remove last character
+                if (ui->compose_buffer_pos > 0) {
+                    ui->compose_buffer_pos--;
+                    ui->compose_buffer[ui->compose_buffer_pos] = '\0';
+                    render_compose(ui);
+                }
+            } else {
+                // Otherwise navigate quick replies
+                ui->quick_reply_index = (ui->quick_reply_index == 0) ? 
+                    MAX_QUICK_REPLIES - 1 : ui->quick_reply_index - 1;
+                render_compose(ui);
+            }
             UI_UNLOCK(ui);
             return 0;
         }
         
         if (action == SCREEN_UI_ACTION_NEXT) {
-            ui->quick_reply_index = (ui->quick_reply_index + 1) % MAX_QUICK_REPLIES;
-            render_compose(ui);
+            // Toggle keyboard or show quick replies
+            if (ui->compose_buffer_pos > 0) {
+                // If we have text in buffer, show keyboard
+                display_ui_show_keyboard(ui);
+            } else {
+                // Otherwise navigate quick replies
+                ui->quick_reply_index = (ui->quick_reply_index + 1) % MAX_QUICK_REPLIES;
+                render_compose(ui);
+            }
             UI_UNLOCK(ui);
             return 0;
         }
         
         if (action == SCREEN_UI_ACTION_SECONDARY) {
-            ui->compose_broadcast = !ui->compose_broadcast;
-            render_compose(ui);
+            // Clear compose buffer or toggle broadcast
+            if (ui->compose_buffer_pos > 0) {
+                ui->compose_buffer[0] = '\0';
+                ui->compose_buffer_pos = 0;
+                render_compose(ui);
+            } else {
+                ui->compose_broadcast = !ui->compose_broadcast;
+                render_compose(ui);
+            }
             UI_UNLOCK(ui);
             return 0;
         }
         
         if (action == SCREEN_UI_ACTION_PRIMARY) {
-            const char *message_text = quick_replies[ui->quick_reply_index];
+            // Send the message
+            const char *message_text;
+            if (ui->compose_buffer_pos > 0) {
+                message_text = ui->compose_buffer;
+            } else {
+                message_text = quick_replies[ui->quick_reply_index];
+            }
+            
             int32_t target = ui->compose_broadcast ? 0 : ui->selected_target_node;
             
             ui->pending.valid = true;
@@ -1216,10 +1379,14 @@ int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
             
             ui_add_sent_message(ui, message_text, target);
             ui->compose_active = false;
+            ui->compose_buffer[0] = '\0';
+            ui->compose_buffer_pos = 0;
+            ui->keyboard_active = false;
             ret = display_ui_refresh(ui);
             UI_UNLOCK(ui);
             return ret;
         }
+        
         UI_UNLOCK(ui);
         return 0;
     }
