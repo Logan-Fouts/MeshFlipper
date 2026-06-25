@@ -1,19 +1,13 @@
 #include "ui/display_ui.h"
+#include "ui/display_ui_internal.h"
 #include <string.h>
 #include <stdio.h>
-
-
-#define MAX_VISIBLE_MESSAGES 6
-#define INBOX_VISIBLE_ROWS 4
-#define NODE_PICKER_VISIBLE_ROWS 4
-#define POPUP_DURATION_MS 1800
-#define INBOX_BROADCAST_COMPOSE_INDEX (-1)
-#define MAX_QUICK_REPLIES 10
 
 #define UI_LOCK(ui) k_mutex_lock(&(ui)->ui_mutex, K_FOREVER)
 #define UI_UNLOCK(ui) k_mutex_unlock(&(ui)->ui_mutex)
 
-static const char *const quick_replies[] = {
+// Quick replies
+const char *const quick_replies[] = {
     "Hi",
     "Bye",
     "Thanks!",
@@ -26,45 +20,14 @@ static const char *const quick_replies[] = {
     "Noted. Will get back to you.",
 };
 
-// Current selection state for inbox
-static int current_display_index = 0;
+// Global state
+int current_display_index = 0;
+int keyboard_search_low = 0;
+int keyboard_search_high = 0;
+bool keyboard_search_mode = false;
 
-// Keyboard state for binary search
-static int keyboard_search_low = 0;
-static int keyboard_search_high = 0;
-static bool keyboard_search_mode = false;
-
-// Forward declarations
-static const char* get_node_name(const struct nodeHistory *node_hist, int32_t node_num);
-static bool is_broadcast_message(const struct message *msg);
-static void build_wrapped_preview(char *out, size_t out_size, const char *text,
-                                  size_t chars_per_line, size_t max_lines);
-static int render_thread_screen(display_ui_t *ui);
-static int render_node_picker(display_ui_t *ui);
-static void render_compose(display_ui_t *ui);
-static bool resolve_thread_target(display_ui_t *ui, int32_t *out_node_num);
-static void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num);
-static void rebuild_broadcast_thread_snapshot(display_ui_t *ui);
-static void rebuild_node_picker_snapshot(display_ui_t *ui);
-static bool history_get_message_at(struct messageHistory *hist, int idx,
-                                   int32_t *out_id, int32_t *out_from_num, 
-                                   int32_t *out_to_num, const char **out_text);
-static bool get_thread_peer_for_message(const struct messageHistory *hist, int idx,
-                                        uint32_t my_node_num, int32_t *out_peer,
-                                        bool *out_outgoing);
-static int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MESSAGES]);
-static int inbox_selected_position(const int *inbox_indices, int inbox_count);
-static int inbox_start_index(int selected_pos, int inbox_count);
-static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t target_node);
-static bool is_broadcast_compose_selected(display_ui_t *ui);
-static void draw_message_popup(display_ui_t *ui, const struct message *msg);
-
-// Keyboard functions
-void display_ui_keyboard_navigate(display_ui_t *ui, int direction);
-void display_ui_keyboard_select(display_ui_t *ui);
-
-// Get node name
-static const char* get_node_name(const struct nodeHistory *node_hist, int32_t node_num)
+// Get node name - REMOVED static
+const char* get_node_name(const struct nodeHistory *node_hist, int32_t node_num)
 {
     if (node_hist == NULL) {
         return "Unknown";
@@ -84,14 +47,14 @@ static const char* get_node_name(const struct nodeHistory *node_hist, int32_t no
     return "Unknown";
 }
 
-// Check if message is broadcast
-static bool is_broadcast_message(const struct message *msg)
+// Check if message is broadcast - REMOVED static
+bool is_broadcast_message(const struct message *msg)
 {
     return msg != NULL && (uint32_t)msg->to == 0xFFFFFFFFu;
 }
 
-// Build wrapped text preview
-static void build_wrapped_preview(char *out, size_t out_size, const char *text,
+// Build wrapped text preview - REMOVED static
+void build_wrapped_preview(char *out, size_t out_size, const char *text,
                                   size_t chars_per_line, size_t max_lines)
 {
     if (out == NULL || out_size == 0 || text == NULL) return;
@@ -134,7 +97,7 @@ static void build_wrapped_preview(char *out, size_t out_size, const char *text,
     }
 }
 
-// Get message at index
+// Get message at index - KEEP static
 static bool history_get_message_at(struct messageHistory *hist, int idx,
                                    int32_t *out_id, int32_t *out_from_num, 
                                    int32_t *out_to_num, const char **out_text)
@@ -150,7 +113,7 @@ static bool history_get_message_at(struct messageHistory *hist, int idx,
     return true;
 }
 
-// Get thread peer for message
+// Get thread peer for message - KEEP static
 static bool get_thread_peer_for_message(const struct messageHistory *hist, int idx,
                                         uint32_t my_node_num, int32_t *out_peer,
                                         bool *out_outgoing)
@@ -188,8 +151,8 @@ static bool get_thread_peer_for_message(const struct messageHistory *hist, int i
     return true;
 }
 
-// Build inbox indices
-static int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MESSAGES])
+// Build inbox indices - REMOVED static
+int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MESSAGES])
 {
     struct messageHistory *hist = ui->message_history;
     struct nodeHistory *node_hist = ui->node_history;
@@ -249,8 +212,8 @@ static int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MES
     return count;
 }
 
-// Inbox selection helpers
-static int inbox_selected_position(const int *inbox_indices, int inbox_count)
+// Inbox selection helpers - REMOVED static
+int inbox_selected_position(const int *inbox_indices, int inbox_count)
 {
     for (int i = 0; i < inbox_count; i++) {
         if (inbox_indices[i] == current_display_index) {
@@ -260,7 +223,7 @@ static int inbox_selected_position(const int *inbox_indices, int inbox_count)
     return 0;
 }
 
-static int inbox_start_index(int selected_pos, int inbox_count)
+int inbox_start_index(int selected_pos, int inbox_count)
 {
     if (inbox_count <= INBOX_VISIBLE_ROWS) {
         return 0;
@@ -279,8 +242,8 @@ static int inbox_start_index(int selected_pos, int inbox_count)
     return start;
 }
 
-// Add sent message to UI
-static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t target_node)
+// Add sent message to UI - REMOVED static
+void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t target_node)
 {
     struct message sent_msg = {
         .id = -1,
@@ -325,8 +288,8 @@ static void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t targ
     }
 }
 
-// Draw message popup
-static void draw_message_popup(display_ui_t *ui, const struct message *msg)
+// Draw message popup - REMOVED static
+void draw_message_popup(display_ui_t *ui, const struct message *msg)
 {
     if (!msg || !ui) return;
     
@@ -357,8 +320,8 @@ static void draw_message_popup(display_ui_t *ui, const struct message *msg)
     display_driver_draw_text(&ui->driver, 18, 90, 1, true, popup_text);
 }
 
-// Rebuild thread snapshot
-static void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num)
+// Rebuild thread snapshot - REMOVED static
+void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num)
 {
     ui->thread_snapshot_count = 0;
     struct messageHistory *hist = ui->message_history;
@@ -386,8 +349,8 @@ static void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num)
     }
 }
 
-// Rebuild broadcast thread snapshot
-static void rebuild_broadcast_thread_snapshot(display_ui_t *ui)
+// Rebuild broadcast thread snapshot - REMOVED static
+void rebuild_broadcast_thread_snapshot(display_ui_t *ui)
 {
     ui->thread_snapshot_count = 0;
     struct messageHistory *hist = ui->message_history;
@@ -406,8 +369,8 @@ static void rebuild_broadcast_thread_snapshot(display_ui_t *ui)
     }
 }
 
-// Rebuild node picker snapshot
-static void rebuild_node_picker_snapshot(display_ui_t *ui)
+// Rebuild node picker snapshot - REMOVED static
+void rebuild_node_picker_snapshot(display_ui_t *ui)
 {
     ui->node_snapshot_count = 0;
     struct nodeHistory *node_hist = ui->node_history;
@@ -469,8 +432,8 @@ static void rebuild_node_picker_snapshot(display_ui_t *ui)
     }
 }
 
-// Render inbox screen
-static int render_inbox(display_ui_t *ui)
+// Render inbox screen - REMOVED static
+int render_inbox(display_ui_t *ui)
 {
     display_driver_clear(&ui->driver);
     
@@ -565,8 +528,8 @@ static int render_inbox(display_ui_t *ui)
     return display_driver_refresh(&ui->driver);
 }
 
-// Render thread screen
-static int render_thread_screen(display_ui_t *ui)
+// Render thread screen - REMOVED static
+int render_thread_screen(display_ui_t *ui)
 {
     display_driver_clear(&ui->driver);
     
@@ -644,8 +607,8 @@ static int render_thread_screen(display_ui_t *ui)
     return display_driver_refresh(&ui->driver);
 }
 
-// Render node picker
-static int render_node_picker(display_ui_t *ui)
+// Render node picker - REMOVED static
+int render_node_picker(display_ui_t *ui)
 {
     rebuild_node_picker_snapshot(ui);
     display_driver_clear(&ui->driver);
@@ -722,8 +685,8 @@ static int render_node_picker(display_ui_t *ui)
     return display_driver_refresh(&ui->driver);
 }
 
-// Render compose screen
-static void render_compose(display_ui_t *ui)
+// Render compose screen - REMOVED static
+void render_compose(display_ui_t *ui)
 {
     display_driver_clear(&ui->driver);
     
@@ -753,15 +716,11 @@ static void render_compose(display_ui_t *ui)
         char display_text[64];
         snprintf(display_text, sizeof(display_text), "MSG: %s", ui->compose_buffer);
         display_driver_draw_text_limited(&ui->driver, 16, 86, 1, true, display_text, 84);
-        
-        if (keyboard_search_mode) {
-            display_driver_draw_text(&ui->driver, 16, 100, 1, false, "BINARY SEARCH: PRIMARY to select");
-        } else {
-            display_driver_draw_text(&ui->driver, 16, 100, 1, false, "KEY: Press NEXT for keyboard");
-        }
+        display_driver_draw_text(&ui->driver, 16, 100, 1, false, "KEY: Press NEXT for keyboard");
     } else {
         const char *reply = quick_replies[ui->quick_reply_index];
         display_driver_draw_text_limited(&ui->driver, 16, 86, 1, true, reply, 84);
+        display_driver_draw_text(&ui->driver, 16, 100, 1, false, "KEY: Press NEXT for keyboard");
     }
     
     display_driver_draw_rect(&ui->driver, 12, ui->driver.hal_config.height - 32,
@@ -770,8 +729,8 @@ static void render_compose(display_ui_t *ui)
                              "2/4:Draft 5:Mode 3:Send");
 }
 
-// Resolve thread target
-static bool resolve_thread_target(display_ui_t *ui, int32_t *out_node_num)
+// Resolve thread target - REMOVED static
+bool resolve_thread_target(display_ui_t *ui, int32_t *out_node_num)
 {
     if (out_node_num == NULL || ui->node_history == NULL || !ui->node_history->my_info.valid) {
         return false;
@@ -804,8 +763,8 @@ static bool resolve_thread_target(display_ui_t *ui, int32_t *out_node_num)
     return true;
 }
 
-// Check if broadcast compose is selected
-static bool is_broadcast_compose_selected(display_ui_t *ui)
+// Check if broadcast compose is selected - REMOVED static
+bool is_broadcast_compose_selected(display_ui_t *ui)
 {
     int inbox_indices[MAX_VISIBLE_MESSAGES];
     int inbox_count = build_inbox_indices(ui, inbox_indices);
@@ -973,200 +932,6 @@ int display_ui_show_popup(display_ui_t *ui, const char *title, const char *messa
     return ret;
 }
 
-// Render keyboard with binary search
-static void render_keyboard_with_search(display_ui_t *ui)
-{
-    if (!ui || !ui->keyboard_active) return;
-    
-    on_screen_keyb_t *keyb = &ui->keyboard;
-    int width = ui->driver.hal_config.width;
-    int height = ui->driver.hal_config.height;
-    
-    // Calculate visible keys
-    int visible_keys[5];
-    for (int i = 0; i < 5; i++) {
-        int idx = (keyb->current_key_ix - 2 + i + keyb->num_keys) % keyb->num_keys;
-        visible_keys[i] = keyb->keyboard[idx];
-    }
-    
-    // Keyboard box
-    int box_x = 20;
-    int box_y = height - 80;
-    int box_w = width - 40;
-    int box_h = 60;
-    
-    // Clear keyboard area
-    display_driver_draw_filled_rect(&ui->driver, box_x, box_y, box_w, box_h, false);
-    display_driver_draw_rect(&ui->driver, box_x, box_y, box_w, box_h, true);
-    
-    // Draw keys
-    int key_width = 36;
-    int key_height = 36;
-    int spacing = 6;
-    int total_keys_width = (5 * key_width) + (4 * spacing);
-    int start_x = (width - total_keys_width) / 2;
-    int start_y = box_y + (box_h - key_height) / 2;
-    
-    for (int i = 0; i < 5; i++) {
-        int x = start_x + i * (key_width + spacing);
-        int y = start_y;
-        bool is_selected = (i == 2);
-        
-        if (is_selected) {
-            display_driver_draw_rect(&ui->driver, x - 2, y - 2, key_width + 4, key_height + 4, true);
-            display_driver_draw_filled_rect(&ui->driver, x, y, key_width, key_height, false);
-            display_driver_draw_rect(&ui->driver, x, y, key_width, key_height, true);
-        } else {
-            display_driver_draw_filled_rect(&ui->driver, x, y, key_width, key_height, false);
-            display_driver_draw_rect(&ui->driver, x, y, key_width, key_height, true);
-        }
-        
-        char key_char[2] = {visible_keys[i], '\0'};
-        int char_x = x + (key_width / 2) - 3;
-        int char_y = y + (key_height / 2) - 4;
-        display_driver_draw_text(&ui->driver, char_x, char_y, 1, is_selected ? false : true, key_char);
-    }
-    
-    // Show search info with mode indicator
-    char info_text[64];
-    int range_size = keyboard_search_high - keyboard_search_low + 1;
-    
-    if (range_size <= 3) {
-        // Free movement mode
-        snprintf(info_text, sizeof(info_text), "FREE MOVE: %d-%d  Key: %d/%d",
-                 keyboard_search_low, keyboard_search_high,
-                 keyb->current_key_ix + 1, keyb->num_keys);
-    } else {
-        // Binary search mode
-        snprintf(info_text, sizeof(info_text), "BINARY: %d-%d (size: %d)  Key: %d/%d",
-                 keyboard_search_low, keyboard_search_high, range_size,
-                 keyb->current_key_ix + 1, keyb->num_keys);
-    }
-    display_driver_draw_text_centered(&ui->driver, box_y + box_h + 8, 1, false, info_text);
-    display_driver_draw_text_centered(&ui->driver, box_y + box_h + 22, 1, false, 
-                                     "PREV/NEXT: Navigate  PRIMARY: Select  SECONDARY: Exit");
-}
-
-// Show keyboard overlay
-int display_ui_show_keyboard(display_ui_t *ui)
-{
-    if (!ui || !ui->initialized) return -EINVAL;
-    
-    UI_LOCK(ui);
-    ui->keyboard_active = true;
-    
-    // Initialize binary search - full range
-    keyboard_search_low = 0;
-    keyboard_search_high = ui->keyboard.num_keys - 1;
-    keyboard_search_mode = true;
-    
-    // Start at middle of keyboard
-    ui->keyboard.current_key_ix = ui->keyboard.num_keys / 2;
-    
-    // Render the current screen background once
-    int ret;
-    if (ui->thread_active) {
-        if (ui->thread_broadcast) {
-            rebuild_broadcast_thread_snapshot(ui);
-        } else {
-            rebuild_thread_snapshot(ui, (uint32_t)ui->thread_node_num);
-        }
-        ret = render_thread_screen(ui);
-    } else if (ui->node_picker_active) {
-        ret = render_node_picker(ui);
-    } else if (ui->compose_active) {
-        render_compose(ui);
-        ret = 0;
-    } else {
-        ret = render_inbox(ui);
-    }
-    
-    // Render keyboard on top
-    render_keyboard_with_search(ui);
-    
-    // Refresh to show keyboard
-    ret = display_driver_refresh(&ui->driver);
-    
-    UI_UNLOCK(ui);
-    return ret;
-}
-
-// Keyboard navigation with pure binary search + free movement at the end
-void display_ui_keyboard_navigate(display_ui_t *ui, int direction)
-{
-    if (!ui || !ui->keyboard_active) return;
-    
-    on_screen_keyb_t *keyb = &ui->keyboard;
-    
-    // BINARY SEARCH
-    int mid = (keyboard_search_low + keyboard_search_high) / 2;
-    
-    if (direction > 0) {
-        // Go to upper half
-        keyboard_search_low = mid + 1;
-        // Jump to middle of upper half
-        keyb->current_key_ix = (keyboard_search_low + keyboard_search_high) / 2;
-    } else {
-        // Go to lower half
-        keyboard_search_high = mid - 1;
-        // Jump to middle of lower half
-        keyb->current_key_ix = (keyboard_search_low + keyboard_search_high) / 2;
-    }
-    
-    // Safety bounds
-    if (keyb->current_key_ix < keyboard_search_low) {
-        keyb->current_key_ix = keyboard_search_low;
-    }
-    if (keyb->current_key_ix > keyboard_search_high) {
-        keyb->current_key_ix = keyboard_search_high;
-    }
-    if (keyb->current_key_ix < 0) keyb->current_key_ix = 0;
-    if (keyb->current_key_ix >= keyb->num_keys) keyb->current_key_ix = keyb->num_keys - 1;
-
-    // Update display - FULL REFRESH every time
-    render_keyboard_with_search(ui);
-    display_driver_refresh(&ui->driver);
-}
-
-// Keyboard select - selects current key and resets search to full range
-void display_ui_keyboard_select(display_ui_t *ui)
-{
-    if (!ui || !ui->keyboard_active) return;
-    
-    char key = get_current_key(&ui->keyboard);
-    
-    // Add key to buffer
-    if (key == ' ') {
-        if (ui->compose_buffer_pos < sizeof(ui->compose_buffer) - 1) {
-            ui->compose_buffer[ui->compose_buffer_pos++] = ' ';
-            ui->compose_buffer[ui->compose_buffer_pos] = '\0';
-        }
-    } else if (key == '.') {
-        if (ui->compose_buffer_pos < sizeof(ui->compose_buffer) - 1) {
-            ui->compose_buffer[ui->compose_buffer_pos++] = '.';
-            ui->compose_buffer[ui->compose_buffer_pos] = '\0';
-        }
-    } else {
-        if (ui->compose_buffer_pos < sizeof(ui->compose_buffer) - 1) {
-            ui->compose_buffer[ui->compose_buffer_pos++] = key;
-            ui->compose_buffer[ui->compose_buffer_pos] = '\0';
-        }
-    }
-    
-    // Reset binary search to full range
-    keyboard_search_low = 0;
-    keyboard_search_high = ui->keyboard.num_keys - 1;
-    keyboard_search_mode = true;
-    ui->keyboard.current_key_ix = ui->keyboard.num_keys / 2;
-    
-    // Update compose screen and keyboard
-    if (ui->compose_active) {
-        render_compose(ui);
-        render_keyboard_with_search(ui);
-        display_driver_refresh(&ui->driver);
-    }
-}
-
 // Refresh UI
 int display_ui_refresh(display_ui_t *ui)
 {
@@ -1194,374 +959,4 @@ int display_ui_refresh(display_ui_t *ui)
     }
     UI_UNLOCK(ui);
     return ret;
-}
-
-// Handle actions
-int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
-{
-    if (!ui || !ui->initialized) {
-        printk("UI not initialized!\n");
-        return -EINVAL;
-    }
-    
-    if (k_mutex_lock(&ui->ui_mutex, K_MSEC(100)) != 0) {
-        printk("UI busy, action %d deferred\n", action);
-        return -EBUSY;
-    }
-    
-    int ret = 0;
-    
-    // Home action
-    if (action == SCREEN_UI_ACTION_HOME) {
-        ui->compose_active = false;
-        ui->thread_active = false;
-        ui->thread_broadcast = false;
-        ui->node_picker_active = false;
-        ui->keyboard_active = false;
-        ui->compose_buffer[0] = '\0';
-        ui->compose_buffer_pos = 0;
-        keyboard_search_mode = false;
-        current_display_index = 0;
-        ret = display_ui_refresh(ui);
-        UI_UNLOCK(ui);
-        return ret;
-    }
-
-    // Inbox state
-    if (!ui->compose_active && !ui->thread_active && !ui->node_picker_active && !ui->keyboard_active) {
-        
-        if (action == SCREEN_UI_ACTION_PREVIOUS) {
-            int inbox_indices[MAX_VISIBLE_MESSAGES];
-            int inbox_count = build_inbox_indices(ui, inbox_indices);
-            if (inbox_count > 0) {
-                int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
-                selected_pos = (selected_pos - 1 + inbox_count) % inbox_count;
-                current_display_index = inbox_indices[selected_pos];
-                ret = render_inbox(ui);
-            }
-            UI_UNLOCK(ui);
-            return ret;
-        }
-
-        if (action == SCREEN_UI_ACTION_NEXT) {
-            int inbox_indices[MAX_VISIBLE_MESSAGES];
-            int inbox_count = build_inbox_indices(ui, inbox_indices);
-            if (inbox_count > 0) {
-                int selected_pos = inbox_selected_position(inbox_indices, inbox_count);
-                selected_pos = (selected_pos + 1) % inbox_count;
-                current_display_index = inbox_indices[selected_pos];
-                ret = render_inbox(ui);
-            }
-            UI_UNLOCK(ui);
-            return ret;
-        }
-
-        if (action == SCREEN_UI_ACTION_PRIMARY) {
-            if (is_broadcast_compose_selected(ui)) {
-                ui->thread_active = true;
-                ui->thread_broadcast = true;
-                ui->thread_message_index = 0;
-                rebuild_broadcast_thread_snapshot(ui);
-                if (ui->thread_snapshot_count > 0) {
-                    ui->thread_message_index = ui->thread_snapshot_count - 1;
-                }
-                ret = render_thread_screen(ui);
-                UI_UNLOCK(ui);
-                return ret;
-            }
-
-            int32_t thread_node = 0;
-            if (resolve_thread_target(ui, &thread_node)) {
-                ret = display_ui_show_thread(ui, thread_node, false);
-                UI_UNLOCK(ui);
-                return ret;
-            }
-            UI_UNLOCK(ui);
-            return 0;
-        }
-
-        if (action == SCREEN_UI_ACTION_SECONDARY) {
-            ret = display_ui_show_node_picker(ui);
-            UI_UNLOCK(ui);
-            return ret;
-        }
-        UI_UNLOCK(ui);
-        return 0;
-    }
-
-    // Node picker state
-    if (ui->node_picker_active && !ui->compose_active && !ui->thread_active) {
-        
-        if (action == SCREEN_UI_ACTION_PREVIOUS || action == SCREEN_UI_ACTION_NEXT) {
-            rebuild_node_picker_snapshot(ui);
-            if (ui->node_snapshot_count == 0) {
-                ret = render_node_picker(ui);
-                UI_UNLOCK(ui);
-                return ret;
-            }
-            
-            if (action == SCREEN_UI_ACTION_PREVIOUS) {
-                if (ui->node_picker_index == 0) {
-                    ui->node_picker_index = ui->node_snapshot_count - 1;
-                } else {
-                    ui->node_picker_index--;
-                }
-            } else {
-                ui->node_picker_index = (ui->node_picker_index + 1) % ui->node_snapshot_count;
-            }
-            ret = render_node_picker(ui);
-            UI_UNLOCK(ui);
-            return ret;
-        }
-        
-        if (action == SCREEN_UI_ACTION_PRIMARY) {
-            rebuild_node_picker_snapshot(ui);
-            if (ui->node_snapshot_count == 0) {
-                ret = render_node_picker(ui);
-                UI_UNLOCK(ui);
-                return ret;
-            }
-            
-            ui->node_picker_active = false;
-            ret = display_ui_show_compose(ui, (int32_t)ui->node_snapshot[ui->node_picker_index].node_num, false);
-            UI_UNLOCK(ui);
-            return ret;
-        }
-        
-        if (action == SCREEN_UI_ACTION_SECONDARY) {
-            ui->node_picker_active = false;
-            current_display_index = 0;
-            ret = display_ui_refresh(ui);
-            UI_UNLOCK(ui);
-            return ret;
-        }
-        UI_UNLOCK(ui);
-        return 0;
-    }
-
-    // Thread state
-    if (ui->thread_active && !ui->compose_active) {
-        
-        if (action == SCREEN_UI_ACTION_PREVIOUS || action == SCREEN_UI_ACTION_NEXT) {
-            if (ui->thread_snapshot_count == 0) {
-                ret = render_thread_screen(ui);
-                UI_UNLOCK(ui);
-                return ret;
-            }
-            
-            if (action == SCREEN_UI_ACTION_PREVIOUS) {
-                ui->thread_message_index = (ui->thread_message_index == 0) ? 
-                    ui->thread_snapshot_count - 1 : ui->thread_message_index - 1;
-            } else {
-                ui->thread_message_index = (ui->thread_message_index + 1) % ui->thread_snapshot_count;
-            }
-            ret = render_thread_screen(ui);
-            UI_UNLOCK(ui);
-            return ret;
-        }
-        
-        if (action == SCREEN_UI_ACTION_PRIMARY) {
-            ret = display_ui_show_compose(ui, ui->thread_node_num, ui->thread_broadcast);
-            UI_UNLOCK(ui);
-            return ret;
-        }
-        
-        if (action == SCREEN_UI_ACTION_SECONDARY) {
-            ui->thread_active = false;
-            ui->thread_broadcast = false;
-            current_display_index = 0;
-            ret = display_ui_refresh(ui);
-            UI_UNLOCK(ui);
-            return ret;
-        }
-        UI_UNLOCK(ui);
-        return 0;
-    }
-
-    // Compose state
-    if (ui->compose_active) {
-        
-        // If keyboard is active, handle keyboard navigation
-        if (ui->keyboard_active) {
-            if (action == SCREEN_UI_ACTION_PREVIOUS) {
-                display_ui_keyboard_navigate(ui, -1);
-                UI_UNLOCK(ui);
-                return 0;
-            }
-            if (action == SCREEN_UI_ACTION_NEXT) {
-                display_ui_keyboard_navigate(ui, 1);
-                UI_UNLOCK(ui);
-                return 0;
-            }
-            if (action == SCREEN_UI_ACTION_PRIMARY) {
-                display_ui_keyboard_select(ui);
-                UI_UNLOCK(ui);
-                return 0;
-            }
-            if (action == SCREEN_UI_ACTION_SECONDARY) {
-                ui->keyboard_active = false;
-                keyboard_search_mode = false;
-                render_compose(ui);
-                display_driver_refresh(&ui->driver);
-                UI_UNLOCK(ui);
-                return 0;
-            }
-            UI_UNLOCK(ui);
-            return 0;
-        }
-        
-        // Regular compose actions
-        if (action == SCREEN_UI_ACTION_PREVIOUS) {
-            if (ui->compose_buffer_pos > 0) {
-                ui->compose_buffer_pos--;
-                ui->compose_buffer[ui->compose_buffer_pos] = '\0';
-                render_compose(ui);
-                display_driver_refresh(&ui->driver);
-            } else {
-                ui->quick_reply_index = (ui->quick_reply_index == 0) ? 
-                    MAX_QUICK_REPLIES - 1 : ui->quick_reply_index - 1;
-                render_compose(ui);
-                display_driver_refresh(&ui->driver);
-            }
-            UI_UNLOCK(ui);
-            return 0;
-        }
-        
-        if (action == SCREEN_UI_ACTION_NEXT) {
-            // Show keyboard on NEXT press in compose
-            display_ui_show_keyboard(ui);
-            UI_UNLOCK(ui);
-            return 0;
-        }
-        
-        if (action == SCREEN_UI_ACTION_SECONDARY) {
-            if (ui->compose_buffer_pos > 0) {
-                ui->compose_buffer[0] = '\0';
-                ui->compose_buffer_pos = 0;
-                render_compose(ui);
-                display_driver_refresh(&ui->driver);
-            } else {
-                ui->compose_broadcast = !ui->compose_broadcast;
-                render_compose(ui);
-                display_driver_refresh(&ui->driver);
-            }
-            UI_UNLOCK(ui);
-            return 0;
-        }
-        
-        if (action == SCREEN_UI_ACTION_PRIMARY) {
-            const char *message_text;
-            if (ui->compose_buffer_pos > 0) {
-                message_text = ui->compose_buffer;
-            } else {
-                message_text = quick_replies[ui->quick_reply_index];
-            }
-            
-            int32_t target = ui->compose_broadcast ? 0 : ui->selected_target_node;
-            
-            ui->pending.valid = true;
-            ui->pending.target_node = target;
-            strncpy(ui->pending.text, message_text, sizeof(ui->pending.text) - 1);
-            ui->pending.text[sizeof(ui->pending.text) - 1] = '\0';
-            
-            ui_add_sent_message(ui, message_text, target);
-            ui->compose_active = false;
-            ui->compose_buffer[0] = '\0';
-            ui->compose_buffer_pos = 0;
-            ui->keyboard_active = false;
-            keyboard_search_mode = false;
-            ret = display_ui_refresh(ui);
-            UI_UNLOCK(ui);
-            return ret;
-        }
-        
-        UI_UNLOCK(ui);
-        return 0;
-    }
-
-    UI_UNLOCK(ui);
-    return 0;
-}
-
-// Take outgoing message from ui pending slot
-bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgoing)
-{
-    if (ui == NULL || outgoing == NULL || !ui->pending.valid) return false;
-    
-    UI_LOCK(ui);
-    *outgoing = ui->pending;
-    ui->pending.valid = false;
-    UI_UNLOCK(ui);
-    return true;
-}
-
-// Notify UI about new message
-void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg)
-{
-    if (!ui || !ui->initialized || !msg) return;
-    
-    if (k_mutex_lock(&ui->ui_mutex, K_MSEC(100)) != 0) {
-        printk("UI busy, skipping notification\n");
-        return;
-    }
-    
-    bool is_broadcast = is_broadcast_message(msg);
-    uint32_t my_node = ui->node_history->my_info.num;
-    bool is_from_me = (msg->from == (int32_t)my_node);
-    
-    if (is_from_me) {
-        UI_UNLOCK(ui);
-        return;
-    }
-    
-    int32_t peer_node = msg->from;
-    if (is_broadcast) {
-        peer_node = 0;
-    }
-    
-    bool in_this_thread = false;
-    if (ui->thread_active) {
-        if (is_broadcast && ui->thread_broadcast) {
-            in_this_thread = true;
-        } else if (!is_broadcast && !ui->thread_broadcast && ui->thread_node_num == peer_node) {
-            in_this_thread = true;
-        }
-    }
-    
-    if (in_this_thread) {
-        ui->last_handled_incoming_id = msg->id;
-        if (ui->thread_broadcast) {
-            rebuild_broadcast_thread_snapshot(ui);
-        } else {
-            rebuild_thread_snapshot(ui, (uint32_t)ui->thread_node_num);
-        }
-        if (ui->thread_snapshot_count > 0) {
-            ui->thread_message_index = ui->thread_snapshot_count - 1;
-        }
-        display_ui_refresh(ui);
-        UI_UNLOCK(ui);
-        return;
-    }
-    
-    if (!ui->popup_active) {
-        ui->popup_active = true;
-        
-        int ret = display_ui_refresh(ui);
-        if (ret < 0) {
-        }
-        
-        draw_message_popup(ui, msg);
-        
-        ret = display_driver_refresh(&ui->driver);
-        if (ret < 0) {
-        }
-        
-        k_sleep(K_MSEC(POPUP_DURATION_MS));
-        ui->popup_active = false;
-        
-        display_ui_refresh(ui);
-    }
-    
-    ui->last_handled_incoming_id = msg->id;
-    UI_UNLOCK(ui);
 }

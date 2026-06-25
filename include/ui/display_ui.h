@@ -9,11 +9,7 @@
 #include "models/mesh_node.h"
 #include "ui/on_screen_keyb.h"
 
-// Forward declarations
-struct messageHistory;
-struct nodeHistory;
-
-// UI Actions - matches your existing enum
+// UI Actions
 enum screen_ui_action {
     SCREEN_UI_ACTION_PREVIOUS = 0,
     SCREEN_UI_ACTION_NEXT,
@@ -114,11 +110,10 @@ int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action);
 bool display_ui_take_outgoing(display_ui_t *ui, struct screen_ui_outgoing *outgoing);
 void display_ui_notify_new_message(display_ui_t *ui, const struct message *msg);
 
-// Add new function declarations:
+// Keyboard handling
 int display_ui_show_keyboard(display_ui_t *ui);
 char display_ui_get_selected_key(display_ui_t *ui);
 void display_ui_keyboard_navigate(display_ui_t *ui, int direction);
 void display_ui_keyboard_select(display_ui_t *ui);
-
 
 #endif

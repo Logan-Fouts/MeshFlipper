@@ -48,8 +48,10 @@ target_sources(
     src/hardware/display_hal.c
     src/hardware/display_hal_weact.c
     src/middleware/display_driver.c
-    src/ui/display_ui.c
     src/ui/on_screen_keyb.c
+    src/ui/display_ui_core.c
+    src/ui/display_ui_actions.c
+    src/ui/display_ui_keyboard.c
 )
 
 target_include_directories(
