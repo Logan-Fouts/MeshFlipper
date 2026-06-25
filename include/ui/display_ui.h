@@ -84,6 +84,7 @@ typedef struct display_ui_t {
     uint32_t node_snapshot_last_heard[32];
     size_t node_snapshot_count;
 
+    // On screen keyboard
     on_screen_keyb_t keyboard;
     bool keyboard_active;
     char compose_buffer[64];

@@ -110,6 +110,7 @@ int display_driver_deinit(display_driver_t *drv)
     return 0;
 }
 
+// Clear the framebuffer
 int display_driver_clear(display_driver_t *drv)
 {
     if (!drv || !drv->initialized) return -EINVAL;

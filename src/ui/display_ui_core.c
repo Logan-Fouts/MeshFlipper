@@ -26,7 +26,7 @@ int keyboard_search_low = 0;
 int keyboard_search_high = 0;
 bool keyboard_search_mode = false;
 
-// Get node name - REMOVED static
+// Get node name
 const char* get_node_name(const struct nodeHistory *node_hist, int32_t node_num)
 {
     if (node_hist == NULL) {
@@ -47,13 +47,13 @@ const char* get_node_name(const struct nodeHistory *node_hist, int32_t node_num)
     return "Unknown";
 }
 
-// Check if message is broadcast - REMOVED static
+// Check if message is broadcast
 bool is_broadcast_message(const struct message *msg)
 {
     return msg != NULL && (uint32_t)msg->to == 0xFFFFFFFFu;
 }
 
-// Build wrapped text preview - REMOVED static
+// Build wrapped text preview
 void build_wrapped_preview(char *out, size_t out_size, const char *text,
                                   size_t chars_per_line, size_t max_lines)
 {
@@ -97,7 +97,7 @@ void build_wrapped_preview(char *out, size_t out_size, const char *text,
     }
 }
 
-// Get message at index - KEEP static
+// Get message at index
 static bool history_get_message_at(struct messageHistory *hist, int idx,
                                    int32_t *out_id, int32_t *out_from_num, 
                                    int32_t *out_to_num, const char **out_text)
@@ -113,7 +113,7 @@ static bool history_get_message_at(struct messageHistory *hist, int idx,
     return true;
 }
 
-// Get thread peer for message - KEEP static
+// Get recipient for a message from the history and message index
 static bool get_thread_peer_for_message(const struct messageHistory *hist, int idx,
                                         uint32_t my_node_num, int32_t *out_peer,
                                         bool *out_outgoing)
@@ -151,7 +151,7 @@ static bool get_thread_peer_for_message(const struct messageHistory *hist, int i
     return true;
 }
 
-// Build inbox indices - REMOVED static
+// Go through all messages and check each and store the latest message for each node that weve sent or recieved a message from
 int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MESSAGES])
 {
     struct messageHistory *hist = ui->message_history;
@@ -212,7 +212,7 @@ int build_inbox_indices(display_ui_t *ui, int out_indices[MAX_VISIBLE_MESSAGES])
     return count;
 }
 
-// Inbox selection helpers - REMOVED static
+// Inbox selection helpers
 int inbox_selected_position(const int *inbox_indices, int inbox_count)
 {
     for (int i = 0; i < inbox_count; i++) {
@@ -242,7 +242,7 @@ int inbox_start_index(int selected_pos, int inbox_count)
     return start;
 }
 
-// Add sent message to UI - REMOVED static
+// Add sent message to UI
 void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t target_node)
 {
     struct message sent_msg = {
@@ -288,7 +288,7 @@ void ui_add_sent_message(display_ui_t *ui, const char *text, int32_t target_node
     }
 }
 
-// Draw message popup - REMOVED static
+// Draw message popup
 void draw_message_popup(display_ui_t *ui, const struct message *msg)
 {
     if (!msg || !ui) return;
@@ -320,7 +320,7 @@ void draw_message_popup(display_ui_t *ui, const struct message *msg)
     display_driver_draw_text(&ui->driver, 18, 90, 1, true, popup_text);
 }
 
-// Rebuild thread snapshot - REMOVED static
+// Rebuild thread snapshot
 void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num)
 {
     ui->thread_snapshot_count = 0;
@@ -349,7 +349,7 @@ void rebuild_thread_snapshot(display_ui_t *ui, uint32_t peer_node_num)
     }
 }
 
-// Rebuild broadcast thread snapshot - REMOVED static
+// Rebuild broadcast thread snapshot
 void rebuild_broadcast_thread_snapshot(display_ui_t *ui)
 {
     ui->thread_snapshot_count = 0;
@@ -369,7 +369,7 @@ void rebuild_broadcast_thread_snapshot(display_ui_t *ui)
     }
 }
 
-// Rebuild node picker snapshot - REMOVED static
+// Rebuild node picker snapshot
 void rebuild_node_picker_snapshot(display_ui_t *ui)
 {
     ui->node_snapshot_count = 0;
@@ -432,7 +432,7 @@ void rebuild_node_picker_snapshot(display_ui_t *ui)
     }
 }
 
-// Render inbox screen - REMOVED static
+// Render inbox screen- latest message from each node we had comms with
 int render_inbox(display_ui_t *ui)
 {
     display_driver_clear(&ui->driver);
@@ -528,7 +528,7 @@ int render_inbox(display_ui_t *ui)
     return display_driver_refresh(&ui->driver);
 }
 
-// Render thread screen - REMOVED static
+// Render thread screen
 int render_thread_screen(display_ui_t *ui)
 {
     display_driver_clear(&ui->driver);
