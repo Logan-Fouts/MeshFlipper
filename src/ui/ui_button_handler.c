@@ -8,6 +8,7 @@
 #define BUTTON_NEXT_PIN     10
 #define BUTTON_PRIMARY_PIN  8
 #define BUTTON_SECONDARY_PIN 5
+#define BUTTON_EXT_PIN 2
 
 #define BUTTON_POLL_INTERVAL_MS 10
 #define BUTTON_DEBOUNCE_MS 50
@@ -40,6 +41,9 @@ static void on_button_press(uint8_t pin, void *user_data)
             break;
         case BUTTON_SECONDARY_PIN:
             action = SCREEN_UI_ACTION_SECONDARY;
+            break;
+        case BUTTON_EXT_PIN:
+            action = SCREEN_UI_ACTION_EXT;
             break;
         default:
             printk("Unknown pin!\n");
@@ -103,6 +107,7 @@ int ui_button_handler_init(ui_button_context_t *ctx, display_ui_t *display_ui)
         {.pin = BUTTON_PRIMARY_PIN, .gpio_dev = gpio_dev},
         {.pin = BUTTON_NEXT_PIN, .gpio_dev = gpio_dev},
         {.pin = BUTTON_SECONDARY_PIN, .gpio_dev = gpio_dev},
+        {.pin = BUTTON_EXT_PIN, .gpio_dev = gpio_dev},
     };
     
     button_callbacks_t callbacks = {

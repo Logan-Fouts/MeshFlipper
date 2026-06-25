@@ -216,6 +216,13 @@ int display_ui_handle_action(display_ui_t *ui, enum screen_ui_action action)
                 UI_UNLOCK(ui);
                 return 0;
             }
+            if (action == SCREEN_UI_ACTION_EXT) {
+                if (ui->compose_buffer_pos > 0) {
+                    ui->compose_buffer_pos -= 1;
+                }
+                render_compose(ui);
+                UI_UNLOCK(ui);
+            }
             UI_UNLOCK(ui);
             return 0;
         }

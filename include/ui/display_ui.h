@@ -16,6 +16,7 @@ enum screen_ui_action {
     SCREEN_UI_ACTION_PRIMARY,
     SCREEN_UI_ACTION_SECONDARY,
     SCREEN_UI_ACTION_HOME,
+    SCREEN_UI_ACTION_EXT,
 };
 
 // Outgoing message from UI

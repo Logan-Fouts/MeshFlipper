@@ -4,7 +4,7 @@
 #include "hardware/button.h"
 #include "ui/display_ui.h"
 
-#define NUM_BUTTONS 4
+#define NUM_BUTTONS 5
 
 /*
     Defines the context for the UI button handler, including button states and a reference to the display UI for handling actions.
